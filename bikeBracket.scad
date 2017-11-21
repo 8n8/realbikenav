@@ -8,6 +8,7 @@ upper_points = [
     [16.35, 29.56]];
 
 lower_points = [
+    [16.35, 29.56],
     [16.12, 24.25],
     [14.46, 17.78],
     [12.71, 12.18],
@@ -15,6 +16,18 @@ lower_points = [
     [6.56, 2.34],
     [3.02, 0.16],
     [0,0]];
+
+half_bottom_points = concat(
+    lower_points,
+    [
+        [0, -5],
+        [5, -5],
+        [10, -2],
+        [16, 6],
+        [19, 13],
+        [21, 19],
+        [21, 29.56],
+        ]);
 
 half_top_points = concat(
     upper_points,
@@ -60,3 +73,21 @@ module half_top_half () {
         }
     }
 }
+
+module half_bottom_half () {
+    union () {
+        linear_extrude(height=40) polygon(points=half_bottom_points);
+        translate([40, 24.56, 40]) rotate(a=90, v = [0,0,1]) rotate(a=90, v = [0,1,0]) halfInterface();
+    }
+}
+
+
+module half() {
+    translate([0, -1, 0]) half_bottom_half();
+    half_top_half();
+}
+
+half();
+mirror([1,0,0]) half();
+
+translate([-20, 69, 20]) rotate(a=90, v=[1,0,0]) interface();
