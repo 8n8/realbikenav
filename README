@@ -1,0 +1,1 @@
+It is the code for collecting data from the bike camera and other sensors, using it to train the neural network for navigating the bike autonomously along the road, and using the net in the navigation.

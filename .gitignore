@@ -1,0 +1,6 @@
+*
+!*.py
+!*.scad
+!*.hs
+!.gitignore
+!README
