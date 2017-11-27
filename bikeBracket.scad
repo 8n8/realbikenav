@@ -32,19 +32,20 @@ half_bottom_points = concat(
 half_top_points = concat(
     upper_points,
     [
-        [21, 29.56],
-        [21, 34.56],
-        [13, 49],
-        [3.5, 49],
-        [3.5, 69],
-        [0, 69]]);
-
-module topHole(x, z) {
-    translate([x, 76, z]) rotate(a = 90, v = [1, 0, 0]) linear_extrude(height=8) circle(4);
-}
+        [16.35, 0],
+        [50, 0],
+        [50, 70],
+        [0, 70]]);
 
 module interfaceHole() {
-    translate([0, 0, -1]) cylinder(h=9, r=3);
+    translate([0, 0, -1]) cylinder(h=14, r=3);
+}
+
+module interfaceHoles() {
+    translate([10, 10, 0]) interfaceHole();
+    translate([30, 10, 0]) interfaceHole();
+    translate([10, 30, 0]) interfaceHole();
+    translate([30, 30, 0]) interfaceHole();
 }
 
 module halfInterface() {
@@ -63,31 +64,39 @@ module interface() {
 }
 
 module half_top_half () {
-    union () {
-        linear_extrude(height=40) polygon(points=half_top_points);
-        {
-            translate([20, 34.56, 40])
-            rotate(a=90, v=[0,1,0])
-            rotate(a=90, v=[1,0,0])
-            halfInterface();
-        }
+    linear_extrude(height=12) polygon(points=half_top_points);
+}
+
+module byBar () {
+    color([1,0,0]) union() {
+        half_top_half();
+        mirror([1,0,0]) half_top_half();
     }
 }
 
-module half_bottom_half () {
+module holdBarNoHoles () {
     union () {
-        linear_extrude(height=40) polygon(points=half_bottom_points);
-        translate([40, 24.56, 40]) rotate(a=90, v = [0,0,1]) rotate(a=90, v = [0,1,0]) halfInterface();
+        byBar();
+        translate([0,0,60]) byBar();
+        translate([45, 70, 0]) rotate(a=90, v=[0,0,1]) cube(size=[12, 90, 72]);
     }
 }
 
-
-module half() {
-    translate([0, -1, 0]) half_bottom_half();
-    half_top_half();
+module hole () {
+    cylinder(r=5, h=14);
 }
 
-half();
-mirror([1,0,0]) half();
+module holes () {
+    translate([30, 83, 36]) rotate(a=90, v=[1,0,0]) hole();
+    translate([-30, 83, 36]) rotate(a=90, v=[1,0,0]) hole();
+}
 
-translate([-20, 69, 20]) rotate(a=90, v=[1,0,0]) interface();
+module holdBar () {
+    difference () {
+        holdBarNoHoles();
+        holes();
+        translate([-20, 82, 16]) rotate(a=90, v=[1,0,0]) interfaceHoles();
+    }
+}
+
+holdBar();
