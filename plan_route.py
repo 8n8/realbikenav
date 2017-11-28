@@ -3,15 +3,14 @@ It calculates the direction to travel in to get to a destination on the
 road map, given the coordinates of the start and end points.
 """
 
+
+import json
 import math
 from typing import List, Dict, NamedTuple, Tuple, Union
 import numpy
 import psycopg2  # type: ignore
 import psycopg2.extras  # type: ignore
-
-
-# It gets the list of node id numbers and their latitudes and longitudes.
-SQL_STRING_FOR_NODES: str = 'SELECT id, lat, lon FROM ways_vertices_pgr;'
+import requests
 
 
 class MapPosition(NamedTuple):
@@ -26,20 +25,17 @@ def main(start: MapPosition, end: MapPosition) -> Tuple[str, float]:
     position to the end position, and returns the compass bearing
     required to start the journey.
     """
-    database_cursor = get_database_cursor()
-    database_cursor.execute(SQL_STRING_FOR_NODES)
-    id_table = table_to_numpy_array(database_cursor.fetchall())
-    route = []
-    while route == []:
-        start_node = nearest_node_to(start, id_table)
-    print(start_node)
-    end_node = nearest_node_to(end, id_table)
-    print(end_node)
-    _, sql_string_for_route = make_sql_string_for_route(
-        start_node, end_node)
-    database_cursor.execute(sql_string_for_route)
-    route = database_cursor.fetchall()
-    return calculate_direction(route[:2], id_table)
+    err, get_request_string_for_route = make_get_request_string_for_route(
+        start, end)
+    if err is not None:
+        return err, None
+    raw_request = requests.get(get_request_string_for_route)
+    if raw_request.status_code != 200:
+        return (
+            "Router server gave status code {}".format(
+                raw_request.status_code),
+            None)
+    return calculate_direction(raw_request.content.decode('utf-8'))
 
 
 def vector_angle_to_north(v: MapPosition) -> Tuple[str, float]:
@@ -47,7 +43,7 @@ def vector_angle_to_north(v: MapPosition) -> Tuple[str, float]:
     It calculates the angle of the vector relative to (0, 1).  The angle
     is between 0 and 2π radians.
     """
-    magnitude = (v.longitude**2 + v.latitude**2)**0.5
+    magnitude: float = (v.longitude**2 + v.latitude**2)**0.5
     if math.isclose(magnitude, 0):
         return "Vector has zero magnitude.", None
     angle = math.acos(v.latitude / magnitude)
@@ -59,67 +55,65 @@ def vector_angle_to_north(v: MapPosition) -> Tuple[str, float]:
 Num = Union[int, float]
 
 
-def calculate_direction(
-        route: List[Dict[str, Num]],
-        id_table: Dict[str, 'numpy.ndarray[Num]']) -> Tuple[str, float]:
+def parse_route(
+        raw_route: str) -> Tuple[str, MapPosition, MapPosition]:
     """
-    It calculates the bearing from the first node in the route to the
-    second node.
+    It decodes the json string containing the route plan, and extracts
+    the coordinates of the ends of the first segment of it.
     """
-    node1: int = int(route[0]['node'])
-    node2: int = int(route[1]['node'])
-    node1index: int = numpy.where(  # type: ignore
-        id_table['id'].astype(int) == node1)[0]
-    node2index: int = numpy.where(  # type: ignore
-        id_table['id'].astype(int) == node2)[0]
-    node1longitude: int = id_table['lon'][node1index][0]  # type: ignore
-    node1latitude: int = id_table['lat'][node1index][0]  # type: ignore
-    node2longitude: int = id_table['lon'][node2index][0]  # type: ignore
-    node2latitude: int = id_table['lat'][node2index][0]  # type: ignore
+    route_as_dict = json.loads(raw_route)
+    if 'code' not in route_as_dict:
+        return "No 'code' key in route string.", None, None
+    if route_as_dict['code'] != 'Ok':
+        return ('Route code is {}'.format(route_as_dict['code']),
+                None,
+                None)
+    points = route_as_dict['routes'][0]['geometry']['coordinates']
+    return (None,
+            MapPosition(longitude=points[0][0], latitude=points[0][1]),
+            MapPosition(longitude=points[1][0], latitude=points[1][1]))
+
+
+def calculate_direction(raw_route: str) -> Tuple[str, float]:
+    """
+    It calculates the bearing along the first segment of the route.
+    """
+    print(raw_route)
+    err, start, end = parse_route(raw_route)
+    if err is not None:
+        return err, None
     diff: MapPosition = MapPosition(
-        longitude=node2longitude - node1longitude,  # type: ignore
-        latitude=node2latitude - node1latitude)  # type: ignore
+        longitude=end.longitude - start.longitude,  # type: ignore
+        latitude=end.latitude - start.latitude)  # type: ignore
     err, angle = vector_angle_to_north(diff)
     if err is not None:
         return "The first two nodes in the route are identical.", None
     return None, angle
 
 
-def nth_nearest_node_to(
-        n: int,
-        position: MapPosition,
-        id_table: Dict[str, 'numpy.ndarray[Num]']) -> int:
-    """
-    It finds the id number of the node on the map that is closest but 'n'
-    to the given position.  So if 'n' is zero then it will find the
-    closest, and if it is 1 it will find the next closests.  The third
-    argument is the table from the database containing in each row the ID
-    number of a node with its corresponding latitude and longitude.  It
-    has columns 'id', 'lat' and 'lon'.
-    """
-    nth_smallest_index: int = int(numpy.argpartition(  # type: ignore
-        (id_table['lat'] - position.latitude)**2 +
-        (id_table['lon'] - position.longitude)**2, n)[n])
-    print('longitude is {} and latitude is {}'.format(
-        id_table['lon'][smallest_index],
-        id_table['lat'][smallest_index]))
-    return int(id_table['id'][smallest_index])  # type: ignore
+def valid_map_position(m: MapPosition) -> bool:
+    """ It checks that a MapPosition is a two-tuple of floats. """
+    return (len(m) == 2 and
+            isinstance(m.latitude, float) and
+            isinstance(m.longitude, float))
 
 
-def make_sql_string_for_route(
-        start_node: int,
-        destination_node: int) -> Tuple[str, str]:
+def make_get_request_string_for_route(
+        start: MapPosition,
+        destination: MapPosition) -> Tuple[str, str]:
     """
     It creates an SQL query string that gets the shortest route between
     the start and end nodes.
     """
-    if not isinstance(start_node, int):
-        return "Start node is not an int.", None
-    if not isinstance(destination_node, int):
-        return "Destination node is not an int.", None
-    return (None, ("SELECT * FROM pgr_dijkstra('SELECT gid AS id, source, "
-                   "target, length AS cost From ways', {}, {}, directed := "
-                   "true);".format(start_node, destination_node)))
+    if not valid_map_position(start):
+        return "Start position is not valid.", None
+    if not valid_map_position(destination):
+        return "Destination position is not valid.", None
+    return (
+        None,
+        "http://localhost:5000/route/v1/driving/{},{};{},{}?geometries="
+        "geojson".format(start.longitude, start.latitude,
+                         destination.longitude, destination.latitude))
 
 
 def get_database_cursor():
