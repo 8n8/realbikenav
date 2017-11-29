@@ -6,10 +6,7 @@ road map, given the coordinates of the start and end points.
 
 import json
 import math
-from typing import List, Dict, NamedTuple, Tuple, Union
-import numpy
-import psycopg2  # type: ignore
-import psycopg2.extras  # type: ignore
+from typing import NamedTuple, Tuple
 import requests
 
 
@@ -50,9 +47,6 @@ def vector_angle_to_north(v: MapPosition) -> Tuple[str, float]:
     if v.longitude < 0:
         angle = 2*math.pi - angle
     return None, angle
-
-
-Num = Union[int, float]
 
 
 def parse_route(
@@ -114,21 +108,3 @@ def make_get_request_string_for_route(
         "http://localhost:5000/route/v1/driving/{},{};{},{}?geometries="
         "geojson".format(start.longitude, start.latitude,
                          destination.longitude, destination.latitude))
-
-
-def get_database_cursor():
-    """ It connects to the database and returns the cursor. """
-    connection = psycopg2.connect(
-        "host='localhost' dbname='routing' user='t'")
-    return connection.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
-
-def table_to_numpy_array(
-        sql_table: List[Dict[str, Num]]) -> Dict[str, 'numpy.ndarray[Num]']:
-    """
-    It converts an SQL table in the form of a list of dictionaries, with
-    a key for each column, into a dictionary of numpy arrays, one for
-    each column.
-    """
-    return {key: numpy.array([float(d[key]) for d in sql_table])
-            for key in sql_table[0].keys()}
