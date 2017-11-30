@@ -1,8 +1,6 @@
-""" The code to run on the microbit. """
+import microbit as m
 
-# pylint: disable=import-error
-
-import microbit as mb  # type: ignore
+m.uart.init(baudrate=115200)
 
 
 led = mb.display.set_pixel
@@ -10,7 +8,7 @@ led = mb.display.set_pixel
 
 # The direction LEDs are the ones at the edge of the 5 x 5 LED block.  They
 # are numbered as follows:
-#
+# 
 #               X
 #       |0  |1  |2  |3  |4
 #    ---|-------------------
@@ -38,16 +36,30 @@ DIRECTION_LED = {
     15: (1, 0)}
 
 
-def set_centre_LEDs(brightness):
-    """ It sets the brightness of the nine centre LEDs. """
-    [led(x, y, brightness) for x in [1, 2, 3] for y in [1, 2, 3]]
-
-
 def flash_centre():
-    """ It flashes the nine centre LEDs on and off again. """
-    set_centre_LEDs(9)
-    mb.sleep(500)
-    set_centre_LEDs(0)
+    led(1, 1, 9)
+    led(1, 2, 9)
+    led(1, 3, 9)
+    led(2, 1, 9)
+    led(2, 2, 9)
+    led(2, 3, 9)
+    led(3, 1, 9)
+    led(3, 2, 9)
+    led(3, 3, 9)
+    sleep(1000)
+    led(1, 1, 0)
+    led(1, 2, 0)
+    led(1, 3, 0)
+    led(2, 1, 0)
+    led(2, 2, 0)
+    led(2, 3, 0)
+    led(3, 1, 0)
+    led(3, 2, 0)
+    led(3, 3, 0)
+
+
+CENTRE_LED_COORDS = [
+    (1, 1), (2, 1), (3, 1), (1, 2), (2, 2), (3, 2), (1, 3), (2, 3), (3, 3)]
 
 
 def display(signal: bytes):
@@ -56,7 +68,7 @@ def display(signal: bytes):
 
     The signal is contained in one byte.  The bits are allocated as
     follows:
-
+    
     12345678
     ________
     ^^^^^^^^
@@ -86,37 +98,28 @@ def display(signal: bytes):
     recording_state = (as_int >> 5) & 0b11
     error_state = (as_int >> 7) & 0b1
 
-    mb.display.clear()
+    m.display.clear()
     if new_destination:
         flash_centre()
 
     dirx, diry = DIRECTION_LED[direction]
     led(dirx, diry, 9)
-
+    
     if recording_state == 1:
         led(1, 2, 9)
 
     if recording_state == 2:
-        [led(x, y, 9) for x, y in DIRECTION_LED.values()]
+        _ = [led(x, y, 9) for x, y in CENTRE_LED_COORDS]
 
     if error_state:
-        [led(x, y, 9) for x in range(4) for y in range(4)]
+        _ = [led(x, y, 9) for x in range(4) for y in range(4)]
 
 
-def main():
-    mb.compass.calibrate()
-    button_on = False
-    while True:
-        signal = mb.uart.readall()
+
+while True:
+    signal = m.uart.readall()
+    if signal is not None:
         display(signal)
-        direction = mb.compass.heading()
-        acceleration = mb.accelerometer.get_values()
-        button_reading = mb.button_a.was_pressed()
-        button_on = not button_reading == button_on
-        mb.display.set_pixel(0, 2, button_on * 9)
-        print('{} {} {} {}'.format(
-            direction, acceleration, button_on, mb.button_b.was_pressed()))
-        mb.sleep(200)
-
-
-main()
+        m.display.set_pixel(2, 2, 9)
+        m.sleep(500)
+    m.display.clear()
