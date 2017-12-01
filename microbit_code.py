@@ -40,7 +40,9 @@ DIRECTION_LED = {
 
 def set_centre_LEDs(brightness):
     """ It sets the brightness of the nine centre LEDs. """
-    [led(x, y, brightness) for x in [1, 2, 3] for y in [1, 2, 3]]
+    for x in (1, 2, 3):
+        for y in (1, 2, 3):
+            led(x, y, brightness)
 
 
 def flash_centre():
@@ -79,7 +81,7 @@ def display(signal: bytes):
           1 is errors
     """
     as_int = int(signal)
-    if signal > 255 or signal < 0:
+    if as_int > 255 or as_int < 0:
         return 'The number was out of range.'
     new_destination = as_int & 0b1
     direction = (as_int >> 1) & 0b1111
@@ -97,13 +99,20 @@ def display(signal: bytes):
         led(1, 2, 9)
 
     if recording_state == 2:
-        [led(x, y, 9) for x, y in DIRECTION_LED.values()]
+        for x, y in DIRECTION_LED.values():
+            led(x, y, 9)
 
     if error_state:
-        [led(x, y, 9) for x in range(4) for y in range(4)]
+        for x in range(4):
+            for y in range(4):
+                led(x, y, 9)
 
 
 def main():
+    """
+    A continuous loop that communicates with the laptop and updates the
+    microbit LED display.
+    """
     mb.compass.calibrate()
     button_on = False
     while True:

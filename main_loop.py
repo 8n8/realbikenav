@@ -14,6 +14,7 @@ import parse  # type: ignore
 import plan_route
 import random
 import math
+import enum
 
 
 class Acceleration(NamedTuple):
@@ -59,7 +60,7 @@ def parse_microbit_reading(reading: bytes) -> Tuple[str, MicrobitReading]:
                     y=int(chunks[2][:-1]),
                     z=int(chunks[3][:-1])),
                 buttonOn=bytes2bool(chunks[4]),
-                buttonB=bytes2bool(chunks[5]))
+                buttonB=bytes2bool(chunks[5])))
     except ValueError:
         return "Could not convert to int.", None
 
@@ -186,6 +187,10 @@ def random_destination() -> plan_route.MapPosition:
 
 
 def is_close(a: plan_route.MapPosition, b: plan_route.MapPosition) -> bool:
+    """
+    It decides if two map positions are close, roughly within a few metres
+    of each other.
+    """
     return (
         (a.longitude - b.longitude)**2 + (a.latitude - b.latitude)**2
         < 0.00000001)
@@ -193,6 +198,11 @@ def is_close(a: plan_route.MapPosition, b: plan_route.MapPosition) -> bool:
 
 @enum.unique
 class RecordingState(enum.Enum):
+    """
+    It represents the recording state.  Either the recording is going on,
+    it has been paused by the user pressing a button on the microbit, or
+    it has stopped because the bike has arrived at its destination.
+    """
     ON = enum.auto()
     OFF_PAUSED = enum.auto()
     OFF_ARRIVED = enum.auto()
@@ -213,7 +223,7 @@ def make_display_code(
     """
     It creates the code that represents the display on the microbit LEDs.
     This is then sent to the microbit and decoded.  For the detail about
-    what the codes mean, look at the comments in the docstring of the 
+    what the codes mean, look at the comments in the docstring of the
     'display' function in the file 'microbit_code.py'.
     """
     if error is None:
@@ -230,7 +240,7 @@ def make_display_code(
         destination_just_created_code = 1
     else:
         destination_just_created_code = 0
-    
+
     return (
         (error_code << 7) + (recording_code << 5) +
         (direction_code << 1) + destination_just_created_code)
@@ -253,13 +263,12 @@ def main():
 
     button_was_on = False
     sensor_error: str = None
-    route_error: str = None
     actual_direction: float = 0
-    destination: plan_route.MapPosition = random_destination() 
+    destination: plan_route.MapPosition = random_destination()
     recording_state: RecordingState = RecordingState.OFF_PAUSED
     brand_new_destination: bool = False
     target_direction: float = 0
-    
+
     while True:
         microbit_serial_port.write(make_display_code(
             None,
