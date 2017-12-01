@@ -28,8 +28,25 @@ class MicrobitReading(NamedTuple):
     """ It represents one reading of the microbit sensors. """
     accel: Acceleration
     compass: int
-    buttonOn: bool
-    buttonB: bool
+    buttonA_just_pressed: bool
+    buttonB_just_pressed: bool
+
+
+class State(NamedTuple):
+    data_directory: str
+    button_A_was_on_last_cycle: bool
+    button_A_toggle: bool
+    destination: MapPosition
+    recording_state: RecordingState
+    brand_new_destination: bool
+    actual_direction: float
+    target_direction: float
+    route_error: str
+    sensor_error: str
+    sensor_readings: SensorsReading
+    start_new_data_batch: bool
+    write_data_to_disk: bool
+    arrived: bool
 
 
 def bytes2bool(b: bytes) -> bool:
@@ -214,7 +231,7 @@ RECORDING_STATE_CODES = {
     RecordingState.OFF_ARRIVED: 2}
 
 
-def make_display_code(
+def state2view(
         error: str,
         target_direction: float,
         actual_direction: float,
@@ -246,56 +263,89 @@ def make_display_code(
         (direction_code << 1) + destination_just_created_code)
 
 
-def main():
+def state_updater(
+        s: State,
+        sensor_readings: SensorsReading,
+        random_destination: plan_route.MapPosition,
+        target_direction_with_err: Tuple[str, float],
+        sensor_error) -> State:
+
+    brand_new_destination = sensor_readings.microbit.buttonB_just_pressed
+    if brand_new_destination:
+        destination = random_destination
+    else:
+        destination = s.destination
+
+    # 1, 1 = 0
+    # 1, 0 = 1
+    # 0, 1 = 1
+    # 0, 0 = 0
+    button_A_toggle = (
+        s.button_A_toggle != sensor_readings.microbit.buttonA_just_pressed)
+    
+    arrived = isclose(sensor_readings.gps, destination)
+
+    if s.button_A_toggle and sensor_readings.microbit.buttonA_just_pressed:
+        recording_state = RecordingState.OFF_PAUSED
+    elif not s.arrived and arrived:  # i.e. just arrived
+        recording_state = RecordingState.OFF_ARRIVED
+    else:
+        recording_state = RecordingState.ON
+
+    route_error, target_direction = target_direction_with_err
+        
+    start_new_data_batch = (
+        sensor_readings.microbit.buttonA_just_pressed and not
+        s.button_A_toggle)
+    if start_new_data_batch:
+        data_directory = new_data_dir
+    else:
+        data_directory = s.data_directory
+
+    return State(
+        data_directory=data_directory,
+        button_A_was_on_last_cycle=
+            s.sensor_readings.microbit.buttonA_just_pressed,
+        button_A_toggle=button_A_toggle,
+        destination=destination,
+        recording_state=recording_state,
+        brand_new_destination=brand_new_destination,
+        actual_direction=(
+            sensor_readings.microbit.compass * 2 * math.pi / 360.0),
+        target_direction=target_direction,
+        route_error=route_error,
+        sensor_error=sensor_error,
+        sensor_readings=sensor_readings,
+        start_new_data_batch=start_new_data_batch,
+        write_data_to_disk=(
+            route_error is None and sensor_error is None and
+            recording_state == RecordingState.ON)
+        arrived=arrived)
+
+
+def main(s: State, state_updater, state2view):
     """
     It runs the main loop which reads the sensors and decides what to do.
     """
-    webcam = cv2.VideoCapture(1)
-
-    gps_serial_port = serial.Serial('/dev/ttyACM0')
-    gps_serial_port.baudrate = 115200
-
-    microbit_serial_port = serial.Serial('/dev/ttyACM1')
-    microbit_serial_port.baudrate = 115200
-
-    data_directory = 'realData/{}'.format(time.time())
-    os.makedirs(data_directory)
-
-    button_was_on = False
-    sensor_error: str = None
-    actual_direction: float = 0
-    destination: plan_route.MapPosition = random_destination()
-    recording_state: RecordingState = RecordingState.OFF_PAUSED
-    brand_new_destination: bool = False
-    target_direction: float = 0
+    os.makedirs(s.data_directory)
+    webcam_handle = cv2.VideoCapture(1)
+    gps_serial_port = serial.Serial('/dev/ttyACM0', baudrate=115200)
+    microbit_serial_port = serial.Serial('/dev/ttyACM1', baudrate=115200)
+    os.makedirs(s.data_directory)
 
     while True:
-        microbit_serial_port.write(make_display_code(
-            None,
-            target_direction,
-            actual_direction,
-            recording_state,
-            brand_new_destination))
-        sensor_error, data = read_sensors(
-            microbit_serial_port, gps_serial_port, webcam, destination)
-        if sensor_error is not None:
-            print(sensor_error)
-            continue
-        sensor_error = None
-        if not data.microbit.buttonOn:
-            button_was_on = False
-            recording_state = RecordingState.OFF_PAUSED
-            continue
-        if data.microbit.buttonB:
-            destination = random_destination()
-            brand_new_destination = True
-        else:
-            brand_new_destination = False
-        recording_state = RecordingState.ON
-        if data.microbit.buttonOn != button_was_on:
-            data_directory = 'realData/{}'.format(time.time())
-            os.makedirs(data_directory)
-        write2file(data, data_directory)
-        button_was_on = True
+        microbit_serial_port.write(state2view(s))
+        sensor_error, sensor_readings = read_sensors(
+            microbit_serial_port, gps_serial_port, webcam, s.destination)
+        if start_new_data_batch:
+            os.makedirs(s.data_directory)
+        if write_data_to_disk:
+            write2file(data, s.data_directory)
+        s = state_updater(
+            s,
+            sensor_readings,
+            random_destination(),
+            plan_route.main(sensor_readings.gps, s.destination),
+            sensor_error)
 
     cv2.ReleaseCapture(1)
