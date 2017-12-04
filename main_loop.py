@@ -394,7 +394,7 @@ def read_input(
 def at_least_one_error(errors: Errors) -> bool:
     """ It decides if there is at least one error in the errors dict. """
     return (not all([v is None if k != 'photo_ok' else v
-                     for k, v in errors]))
+                     for k, v in errors.items()]))
 
 
 def send_output(output: Output, microbit_port):
@@ -426,7 +426,7 @@ def main():
         'brand_new_destination': False,
         'destination': destination,
         'parsed_input': {
-            'grey_photo': np.zeros(1, dypte=np.uint8),
+            'grey_photo': np.zeros(1),
             'microbit': {
                 'accel': {'x': 0, 'y': 0, 'z': 0},
                 'compass': 0,
@@ -447,15 +447,19 @@ def main():
         'write_data_to_disk': False,
         'arrived': False}
 
-    with cv2.VideoCapture(1) as webcam_handle, \
-            serial.Serial('/dev/ttyACM0', baudrate=115200) as gps_port, \
+    webcam_handle = cv2.VideoCapture(0)
+
+    with serial.Serial('/dev/ttyACM0', baudrate=115200) as gps_port, \
             serial.Serial('/dev/ttyACM1', baudrate=115200) as microbit_port:
         while True:
             send_output(state2output(state), microbit_port)
             raw_input_data = read_input(
-                state['position'],
+                state['parsed_input']['gps'],
                 state['destination'],
                 webcam_handle,
                 gps_port,
                 microbit_port)
             state = update_state(state, parse_input(raw_input_data))
+
+
+main()
