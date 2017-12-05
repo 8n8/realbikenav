@@ -41,7 +41,7 @@ class Acceleration(TypedDict):
 class MicrobitReading(TypedDict):
     """ It represents one reading of the microbit sensors. """
     accel: Acceleration
-    compass: int
+    compass: float
     buttonA: bool
     buttonB: bool
 
@@ -52,10 +52,10 @@ class Errors(TypedDict):
     calculating the route.
     """
     route: str
-    gps_read: str
+    gps_read: bool
     gps_parse: str
     photo_ok: bool
-    microbit_read: str
+    microbit_read: bool
     microbit_parse: str
 
 
@@ -89,12 +89,12 @@ class State(TypedDict):
 
 class RawInput(TypedDict):
     """ It represents the raw input data, from various sources. """
-    err_and_microbit: Tuple[str, bytes]
-    err_and_gps: Tuple[str, bytes]
+    microbit: bytes
+    gps: bytes
     err_and_colour_photo: Tuple[bool, 'np.ndarray[np.uint8]']
     timestamp: float
     err_and_target_direction: Tuple[str, float]
-    random_destination: plan_route.MapPosition
+    err_and_random_destination: Tuple[str, plan_route.MapPosition]
 
 
 def bytes2bool(b: bytes) -> bool:
@@ -111,8 +111,14 @@ def parse_microbit_reading(reading: bytes) -> Tuple[str, MicrobitReading]:
     It converts the reading from the serial input, which is bytes, into
     a tuple of ints.
     """
+    # cutoff = 40
+    # if len(reading) > cutoff:
+    #     reading = reading[-cutoff:]
+    print('reading is {}'.format(reading.decode('utf-8')))
+    print('bytearray length is {}'.format(len(reading)))
     chunks = reading.split()
-    print(chunks)
+    print('length of chunks is: {}'.format(len(chunks)))
+    print('chunks is {}'.format(chunks))
     if len(chunks) != 6:
         return "List does not have exactly six elements.", None
     try:
@@ -121,11 +127,11 @@ def parse_microbit_reading(reading: bytes) -> Tuple[str, MicrobitReading]:
             MicrobitReading(
                 compass=int(chunks[0]),
                 accel=Acceleration(
-                    x=int(chunks[1][1:-1]),
-                    y=int(chunks[2][:-1]),
-                    z=int(chunks[3][:-1])),
-                buttonA=bytes2bool(chunks[4]),
-                buttonB=bytes2bool(chunks[5])))
+                    x=int(chunks[1]),
+                    y=int(chunks[2]),
+                    z=int(chunks[3])),
+                buttonA=bool(chunks[4]),
+                buttonB=bool(chunks[5])))
     except ValueError:
         return "Could not convert to int.", None
 
@@ -188,11 +194,11 @@ def write2file(
         parsed_input['grey_photo'])
 
 
-def make_random_destination() -> plan_route.MapPosition:
+def make_random_destination() -> Tuple[str, plan_route.MapPosition]:
     """ It generates a random location close to Kingsbridge, Devon, UK. """
-    return plan_route.MapPosition(
+    return (plan_route.nearest_point(plan_route.MapPosition(
         longitude=random.uniform(-3.7866, -3.7662),
-        latitude=random.uniform(50.273, 50.293))
+        latitude=random.uniform(50.273, 50.293))))
 
 
 def is_close(a: plan_route.MapPosition, b: plan_route.MapPosition) -> bool:
@@ -271,23 +277,26 @@ def calculate_view(
 
 def parse_input(raw_data: RawInput) -> ParsedInput:
     """ It parses the input data. """
+
     route_error, target_direction = raw_data['err_and_target_direction']
-    gps_read_error, raw_gps_reading = raw_data['err_and_gps']
-    if gps_read_error is None:
-        gps_parse_error, gps_reading = parse_gps_reading(raw_gps_reading)
-    else:
+
+    gps_read_error = raw_data['gps'] is None
+    if gps_read_error:
         gps_parse_error = None
         gps_reading = None
-    gps_parse_error, gps_reading = parse_gps_reading(raw_gps_reading)
-    photo_ok, colour_photo = raw_data['err_and_colour_photo']
-    microbit_read_error, raw_microbit_readings = (
-        raw_data['err_and_microbit'])
-    if microbit_read_error is None:
-        microbit_parse_error, microbit_readings = parse_microbit_reading(
-            raw_microbit_readings)
     else:
-        microbit_parse_error = None
+        gps_parse_error, gps_reading = parse_gps_reading(raw_data['gps'])
+
+    photo_ok, colour_photo = raw_data['err_and_colour_photo']
+
+    microbit_read_error = raw_data['microbit'] is None
+    if microbit_read_error:
         microbit_readings = None
+        microbit_parse_error = None
+    else:
+        microbit_parse_error, microbit_readings = parse_microbit_reading(
+            raw_data['microbit'])
+
     return {
         'microbit': microbit_readings,
         'gps': gps_reading,
@@ -309,10 +318,12 @@ def update_state(s: State, parsed_input: ParsedInput) -> State:
     It calculates the new state, given the existing one, the sensor
     readings, a new random destination, and the target direction.
     """
+    print(parsed_input['errors'])
     if at_least_one_error(parsed_input['errors']):
         s['parsed_input']['errors'] = parsed_input['errors']
         s['write_data_to_disk'] = False
         s['start_new_data_batch'] = False
+        s['parsed_input']['timestamp'] = parsed_input['timestamp']
         return s
 
     brand_new_destination = parsed_input['microbit']['buttonB']
@@ -374,20 +385,23 @@ def read_input(
     # reader.  This is so that the reading is fresh instead of being
     # the old data left in the buffer.
     gps_serial_port.reset_input_buffer()
-    microbit_serial_port.reset_input_buffer()
 
     # The GPS receiver produces a batch of 7 lines of output for each
     # reading.  The final line of the seven is the one with the position
     # in it.  The for loop is for ignoring the first six lines.
-    for _ in range(6):
+    for _ in range(7):
         gps_serial_port.readline()
 
+    microbit_serial_port.reset_input_buffer()
+    print('inWaiting is {}'.format(microbit_serial_port.inWaiting()))
+    destination = make_random_destination()
+    print('destination is {}'.format(destination))
     return {
-        'err_and_microbit': microbit_serial_port.readline(),
-        'err_and_gps': gps_serial_port.readline(),
+        'microbit': microbit_serial_port.readline(),
+        'gps': gps_serial_port.readline(),
         'err_and_colour_photo': webcam_handle.read(),
         'timestamp': time.time(),
-        'random_destination': make_random_destination(),
+        'random_destination': destination,
         'err_and_target_direction': plan_route.main(position, destination)}
 
 
@@ -406,10 +420,9 @@ def send_output(output: Output, microbit_port):
     microbit_port.write(output['display'])
     if at_least_one_error(output['parsed_input']['errors']):
         with open('error_log.txt', 'a') as error_file:
-            json.dump(
+            error_file.write(json.dumps(
                 {'timestamp': output['parsed_input']['timestamp'],
-                 'errors': output['parsed_input']['errors']},
-                error_file)
+                 'errors': output['parsed_input']['errors']}) + '\n')
 
 
 def main():
@@ -429,7 +442,7 @@ def main():
             'grey_photo': np.zeros(1),
             'microbit': {
                 'accel': {'x': 0, 'y': 0, 'z': 0},
-                'compass': 0,
+                'compass': 0.0,
                 'buttonA': False,
                 'buttonB': False},
             'gps': plan_route.MapPosition(latitude=0, longitude=0),
@@ -451,7 +464,9 @@ def main():
 
     with serial.Serial('/dev/ttyACM0', baudrate=115200) as gps_port, \
             serial.Serial('/dev/ttyACM1', baudrate=115200) as microbit_port:
+        counter = 0
         while True:
+            print(counter)
             send_output(state2output(state), microbit_port)
             raw_input_data = read_input(
                 state['parsed_input']['gps'],
@@ -460,6 +475,7 @@ def main():
                 gps_port,
                 microbit_port)
             state = update_state(state, parse_input(raw_input_data))
+            counter += 1
 
 
 main()

@@ -35,6 +35,30 @@ def main(start: MapPosition, end: MapPosition) -> Tuple[str, float]:
     return calculate_direction(raw_request.content.decode('utf-8'))
 
 
+def nearest_point(v: MapPosition) -> Tuple[str, MapPosition]:
+    """
+    It finds the nearest point on the road network to the given map
+    position.
+    """
+    request_string: str = make_get_request_string_for_snap(v)
+    raw_response = requests.get(request_string)
+    if raw_response.status_code != 200:
+        return (
+            'Router server gave status code {}'.format(
+                raw_response.status_code),
+            None)
+    return None, parse_snap_response(raw_response.content.decode('utf-8'))
+
+
+def make_get_request_string_for_snap(v: MapPosition) -> str:
+    """
+    It makes the string for finding out the nearest accessible node to
+    the map coordinate.
+    """
+    return 'http://localhost:5000/nearest/v1/driving/{},{}'.format(
+        v.longitude, v.latitude)
+
+
 def vector_angle_to_north(v: MapPosition) -> Tuple[str, float]:
     """
     It calculates the angle of the vector relative to (0, 1).  The angle
@@ -66,6 +90,15 @@ def parse_route(
     return (None,
             MapPosition(longitude=points[0][0], latitude=points[0][1]),
             MapPosition(longitude=points[1][0], latitude=points[1][1]))
+
+
+def parse_snap_response(raw_response: str) -> MapPosition:
+    """ It extracts the first location from the snap response. """
+    as_json = json.loads(raw_response)
+    raw_position = as_json['waypoints'][0]['location']
+    return MapPosition(
+        longitude=float(raw_position[0]),
+        latitude=float(raw_position[1]))
 
 
 def calculate_direction(raw_route: str) -> Tuple[str, float]:
