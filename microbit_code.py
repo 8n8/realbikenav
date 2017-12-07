@@ -1,9 +1,9 @@
 # pylint: disable=missing-docstring, import-error
 # There isn't enough room for docstrings on the microbit.
 
-from typing import Dict, Set, Tuple  # noqa: F401
+# from typing import Dict, Set, Tuple  # noqa: F401
 import microbit as mb  # type: ignore
-import microbit_types as t  # noqa: F401
+# import microbit_types as t  # noqa: F401
 
 
 DIRECTION_LED = {
@@ -26,26 +26,16 @@ DIRECTION_LED = {
 
 
 def send_output(output):  # type: (t.OutputSlashState) -> None
-    op = '{} {} {} {} {} {}'.format(
+    print('{} {} {} {} {} {}'.format(
         output['direction'],
         output['acceleration'][0],
         output['acceleration'][1],
         output['acceleration'][2],
-        int(output['buttonA']),
-        int(output['buttonB']))
-    print(op)
+        output['buttonAcounter'],
+        output['buttonBcounter']))
     mb.display.clear()
     for led in output['display']:
         mb.display.set_pixel(led[0], led[1], 9)
-
-
-def read_input():  # type: () -> t.RawInput
-    return {
-        'display': mb.uart.readall(),
-        'compass_heading': mb.compass.heading(),
-        'acceleration': mb.accelerometer.get_values(),
-        'buttonA': mb.button_a.was_pressed(),
-        'buttonB': mb.button_b.was_pressed()}
 
 
 ALL_LEDS = {
@@ -64,8 +54,7 @@ NEW_DESTINATION_LEDS = {
     1: {(3, 2)}}  # type: Dict[int, Set[Tuple[int, int]]]
 
 
-def parse_input(
-        raw_input_data):  # type: (t.RawInput) -> t.ParsedInput
+def parse_input(raw_input_data):  # type: (t.RawInput) -> t.ParsedInput
     no_serial_input = False  # type: bool
     recording_state_dont_care = False  # type: bool
     if raw_input_data['display'] is not None:
@@ -79,17 +68,10 @@ def parse_input(
     else:
         no_serial_input = True
     if no_serial_input or recording_state_dont_care:
-        # mb.display.scroll('nsi' + str(no_serial_input))
-        # mb.display.scroll('rsdc' + str(recording_state_dont_care))
-        # error_state = 1
         error_state = 0
         direction = 0
         recording_state = 0
         new_destination = 0
-    # mb.display.scroll(str(raw_input_data['compass_heading']))
-    # direction_float = float(raw_input_data['compass_heading'])*2*math.pi/360
-    # mb.display.scroll(str(direction_float))
-    # mb.display.scroll('es' + str(error_state))
     return (
         {'display': ({DIRECTION_LED[direction]} |
                      ERROR_LEDS[error_state] |
@@ -97,17 +79,26 @@ def parse_input(
                      NEW_DESTINATION_LEDS[new_destination]),
          'direction': raw_input_data['compass_heading'],
          'acceleration': raw_input_data['acceleration'],
+         'new_input': raw_input_data['new_input'],
          'buttonA': raw_input_data['buttonA'],
          'buttonB': raw_input_data['buttonB']})
 
 
-def update_state(parsed_input):  # type: (t.ParsedInput) -> t.OutputSlashState
+def update_state(state, parsed_input):  # type: (t.OSS, t.PI) -> t.OSS
+    if parsed_input['new_input']:
+        display = parsed_input['display']
+    else:
+        display = state['display']
     return {
-        'display': parsed_input['display'],
+        'display': display,
         'direction': parsed_input['direction'],
         'acceleration': parsed_input['acceleration'],
-        'buttonA': parsed_input['buttonA'],
-        'buttonB': parsed_input['buttonB']}
+        'buttonAcounter':
+            (state['buttonAcounter'] < 100) * (
+            state['buttonAcounter'] + parsed_input['buttonA']),
+        'buttonBcounter':
+            (state['buttonBcounter'] < 100) * (
+            state['buttonBcounter'] + parsed_input['buttonB'])}
 
 
 def main():
@@ -116,14 +107,19 @@ def main():
         'display': [],
         'direction': 0,
         'acceleration': (0, 0, 0),
-        'buttonA': False,
-        'buttonB': False}  # type: t.OutputSlashState
+        'buttonAcounter': 0,
+        'buttonBcounter': 50}  # type: t.OutputSlashState
     while True:
         send_output(state)
-        raw_input_data = read_input()  # type: Tuple[str, t.RawInput]
+        raw_input_data = {
+            'new_input': mb.uart.any(),
+            'display': mb.uart.read(1),
+            'compass_heading': mb.compass.heading(),
+            'acceleration': mb.accelerometer.get_values(),
+            'buttonA': mb.button_a.was_pressed(),
+            'buttonB': mb.button_b.was_pressed()}  # type: t.RawInput
         state = update_state(
-            parse_input(raw_input_data))  # type: OutputSlashState
-        mb.sleep(600)
+            state, parse_input(raw_input_data))  # type: t.OutputSlashState
 
 
 main()

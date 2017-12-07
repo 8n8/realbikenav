@@ -1,6 +1,9 @@
 *
+!microbit_cpp_code/
+!microbit_cpp_code/module.json
+!microbit_cpp_code/source/
+!microbit_cpp_code/source/*.cc
+!microbit_cpp_code/source/*.h
 !*.py
-!*.scad
-!*.hs
 !.gitignore
 !README

@@ -105,7 +105,6 @@ def calculate_direction(raw_route: str) -> Tuple[str, float]:
     """
     It calculates the bearing along the first segment of the route.
     """
-    print(raw_route)
     err, start, end = parse_route(raw_route)
     if err is not None:
         return err, None

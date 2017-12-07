@@ -1,0 +1,11 @@
+{
+  "name": "microbit-cpp-code",
+  "version": "0.0.0",
+  "bin": "./source",
+  "private": true,
+  "description": "The code that runs on the microbit.",
+  "author": "",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "microbit": "lancaster-university/microbit"}
+}
