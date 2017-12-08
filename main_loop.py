@@ -112,10 +112,11 @@ def parse_microbit_reading(reading: bytes) -> Tuple[str, MicrobitReading]:
     # cutoff = 40
     # if len(reading) > cutoff:
     #     reading = reading[-cutoff:]
-    chunks = reading.split()
+    as_string = reading.decode('utf-8')
+    chunks = as_string.split()
     if len(chunks) != 6:
         print(chunks)
-        return "List does not have exactly six elements.", None
+        return "Byte array does not have exactly 24 elements.", None
     try:
         return (
             None,
@@ -276,11 +277,14 @@ def calculate_view(
                      not errors['photo_ok'] or
                      errors['microbit'] is not None or
                      gps_error_count > 20)
+    if error_code == 1:
+        print(errors)
 
     recording_code = RECORDING_STATE_CODES[recording_state]
 
     direction_code: int = make_direction_code(
         target_direction, actual_direction)
+    print('direction_code is {}'.format(direction_code))
 
     if brand_new_destination:
         destination_just_created_code = 1
@@ -418,7 +422,7 @@ def read_microbit(microbit_serial_port) -> Tuple[str, MicrobitReading]:
     """
     It tries several times to read the microbit and get a valid reading.
     """
-    err = 'not None'
+    err = 'could not get valid microbit reading'
     for _ in range(3):
         raw = microbit_serial_port.readline()
         err, parsed = parse_microbit_reading(raw)
@@ -442,18 +446,19 @@ def read_input(
     # reader.  This is so that the reading is fresh instead of being
     # the old data left in the buffer.
     # gps_serial_port.reset_input_buffer()
-    microbit_serial_port.reset_input_buffer()
-
+    # microbit_serial_port.reset_input_buffer()
     destination = make_random_destination()
     mb = read_microbit(microbit_serial_port)
-    err, _ = mb
-    return {
+    gps = read_gps(gps_serial_port)
+    route = plan_route.main(position, destination)
+    result: RawInput = {
         'err_and_microbit': mb,
-        'err_and_gps': read_gps(gps_serial_port),
+        'err_and_gps': gps,
         'err_and_colour_photo': webcam_handle.read(),
         'timestamp': time.time(),
         'random_destination': destination,
-        'err_and_target_direction': plan_route.main(position, destination)}
+        'err_and_target_direction': route}
+    return result
 
 
 def at_least_one_error(errors: Errors) -> bool:
@@ -491,7 +496,6 @@ def main():
         'gps_error_count': 0,
         'data_directory': 'realData/{}'.format(time.time()),
         'button_A_toggle': False,
-        'button_B_toggle': False,
         'recording_state': RecordingState.OFF_PAUSED,
         'brand_new_destination': False,
         'destination': destination,
@@ -518,8 +522,8 @@ def main():
 
     webcam_handle = cv2.VideoCapture(0)
 
-    with serial.Serial('/dev/ttyACM1', baudrate=115200) as gps_port, \
-            serial.Serial('/dev/ttyACM0', baudrate=115200) as microbit_port:
+    with serial.Serial('/dev/ttyACM0', baudrate=115200) as gps_port, \
+            serial.Serial('/dev/ttyACM1', baudrate=115200) as microbit_port:
         counter = 0
         while True:
             print('counter is {}'.format(counter))
