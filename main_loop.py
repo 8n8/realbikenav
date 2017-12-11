@@ -31,6 +31,14 @@ class RecordingState(enum.Enum):
     OFF_ARRIVED = enum.auto()
 
 
+class GpsReading(TypedDict):
+    """ It represents the reading from the GPS receiver. """
+    speed: float
+    speed_error: str
+    position: plan_route.MapPosition
+    position_error: str
+
+
 class Acceleration(TypedDict):
     """ It represents the acceleration reading. """
     x: int
@@ -52,15 +60,19 @@ class Errors(TypedDict):
     calculating the route.
     """
     route: str
-    gps: str
+    gps_speed: str
+    gps_position: str
+    gps_buffer_too_small: str
     photo_ok: bool
     microbit: str
+    random_destination: str
 
 
 class ParsedInput(TypedDict):
     """ It contains the input data after parsing.  """
     microbit: MicrobitReading
-    gps: plan_route.MapPosition
+    gps_position: plan_route.MapPosition
+    gps_speed: float
     grey_photo: 'np.ndarray[np.uint8]'
     timestamp: float
     target_direction: float
@@ -75,6 +87,8 @@ class State(TypedDict):
     """
     gps_error_count: int
     data_directory: str
+    speed: float
+    position: plan_route.MapPosition
     button_A_toggle: bool
     destination: plan_route.MapPosition
     recording_state: RecordingState
@@ -88,11 +102,11 @@ class State(TypedDict):
 class RawInput(TypedDict):
     """ It represents the raw input data, from various sources. """
     err_and_microbit: Tuple[str, MicrobitReading]
-    err_and_gps: Tuple[str, plan_route.MapPosition]
+    err_and_gps: Tuple[str, GpsReading]
     err_and_colour_photo: Tuple[bool, 'np.ndarray[np.uint8]']
     timestamp: float
     err_and_target_direction: Tuple[str, float]
-    random_destination: plan_route.MapPosition
+    err_and_random_destination: Tuple[str, plan_route.MapPosition]
 
 
 def bytes2bool(b: bytes) -> bool:
@@ -149,16 +163,19 @@ def angle_minutes_to_float(angle: str) -> float:
     return float(degrees) + float(whole_minutes + '.' + minutes_decimals) / 60
 
 
-GPS_PARSER = parse.compile('$GPGLL,{:f},{:w},{:f},{:w},{:S}\r\n')
+GPS_POSITION_PARSER = parse.compile('$GPGLL,{:f},{:w},{:f},{:w},{:S}\r\n')
 
 
-def parse_gps_reading(
+def parse_gps_position_reading(
         line_of_output: bytes) -> Tuple[str, plan_route.MapPosition]:
-    """ It parses a line of the output from the GPS reader.  """
+    """
+    It parses a line of the output from the GPS reader that contains the
+    position.
+    """
     as_string = line_of_output.decode('utf-8')
-    parsed = GPS_PARSER.parse(as_string)
+    parsed = GPS_POSITION_PARSER.parse(as_string)
     if parsed is None:
-        return "Could not parse GPS reading.", None
+        return "Could not parse GPS position reading.", None
     if parsed[1] == 'N':
         latitude_sign = 1
     if parsed[1] == 'S':
@@ -172,8 +189,26 @@ def parse_gps_reading(
         longitude=longitude_sign * angle_minutes_to_float(str(parsed[2]))))
 
 
+GPS_SPEED_PARSER = parse.compile('$GPVTG,{},N,{:f},K{}')
+
+
+def parse_gps_speed_reading(line_of_output: bytes) -> Tuple[str, float]:
+    """
+    It parses the line of the output from the GPS reader that contains the
+    speed.
+    """
+    as_string = line_of_output.decode('utf-8')
+    parsed = GPS_SPEED_PARSER.parse(as_string)
+    if parsed is None:
+        return "Could not parse GPS speed reading.", None
+    # The raw reading is in km/hour, so to convert it into metres / seconde
+    # it is multiplied by 1000 / (60*60) = 0.277777778.
+    return None, parsed[-2] * 0.277777778
+
+
 def write2file(
         parsed_input: ParsedInput,
+        destination: plan_route.MapPosition,
         directory: str):
     """
     It writes the sensor readings to disk. The numeric data is converted
@@ -182,7 +217,9 @@ def write2file(
     """
     json4file = json.dumps(
         {'microbit': parsed_input['microbit'],
-         'gps': parsed_input['gps'],
+         'destination': destination,
+         'gps_speed': parsed_input['gps_speed'],
+         'gps_position': parsed_input['gps_position'],
          'timestamp': parsed_input['timestamp'],
          'target_direction': parsed_input['target_direction']})
     with open('{}/sensor_readings.dat'
@@ -196,11 +233,11 @@ def write2file(
         parsed_input['grey_photo'])
 
 
-def make_random_destination() -> plan_route.MapPosition:
+def make_random_destination() -> Tuple[str, plan_route.MapPosition]:
     """ It generates a random location close to Kingsbridge, Devon, UK. """
-    return plan_route.MapPosition(
+    return plan_route.nearest_point(plan_route.MapPosition(
         longitude=random.uniform(-3.7866, -3.7662),
-        latitude=random.uniform(50.273, 50.293))
+        latitude=random.uniform(50.273, 50.293)))
 
 
 def is_close(a: plan_route.MapPosition, b: plan_route.MapPosition) -> bool:
@@ -225,6 +262,7 @@ class Output(TypedDict):
     data_directory: str
     write_data_to_disk: bool
     parsed_input: ParsedInput
+    destination: plan_route.MapPosition
     display: int
 
 
@@ -237,6 +275,7 @@ def state2output(state: State) -> Output:
         'data_directory': state['data_directory'],
         'write_data_to_disk': state['write_data_to_disk'],
         'parsed_input': state['parsed_input'],
+        'destination': state['destination'],
         'display': calculate_view(
             state['gps_error_count'],
             state['parsed_input']['errors'],
@@ -284,7 +323,6 @@ def calculate_view(
 
     direction_code: int = make_direction_code(
         target_direction, actual_direction)
-    print('direction_code is {}'.format(direction_code))
 
     if brand_new_destination:
         destination_just_created_code = 1
@@ -308,23 +346,30 @@ def parse_input(raw_data: RawInput) -> ParsedInput:
 
     route_error, target_direction = raw_data['err_and_target_direction']
 
-    gps_error, gps_reading = raw_data['err_and_gps']
+    gps_err, gps_reading = raw_data['err_and_gps']
 
     photo_ok, colour_photo = raw_data['err_and_colour_photo']
 
     microbit_error, microbit_reading = raw_data['err_and_microbit']
 
+    destination_err, random_destination = (
+        raw_data['err_and_random_destination'])
+
     return {
         'microbit': microbit_reading,
-        'gps': gps_reading,
+        'gps_position': gps_reading['position'],
+        'gps_speed': gps_reading['speed'],
         'grey_photo': cv2.cvtColor(colour_photo, cv2.COLOR_BGR2GRAY),
         'timestamp': raw_data['timestamp'],
         'target_direction': target_direction,
-        'random_destination': raw_data['random_destination'],
+        'random_destination': random_destination,
         'errors': {
             'route': route_error,
-            'gps': gps_error,
+            'gps_speed': gps_reading['speed_error'],
+            'gps_position': gps_reading['position_error'],
+            'gps_buffer_too_small': gps_err,
             'photo_ok': photo_ok,
+            'random_destination': destination_err,
             'microbit': microbit_error}}
 
 
@@ -333,21 +378,35 @@ def update_state(s: State, parsed_input: ParsedInput) -> State:
     It calculates the new state, given the existing one, the sensor
     readings, a new random destination, and the target direction.
     """
-    gps_error = parsed_input['errors']['gps'] is not None
+    gps_error = (
+        parsed_input['errors']['gps_position'] is not None or
+        parsed_input['errors']['gps_speed'] is not None or
+        parsed_input['errors']['gps_buffer_too_small'] is not None)
+
     if gps_error:
         gps_error_count = s['gps_error_count'] + 1
-        parsed_input['gps'] = s['parsed_input']['gps']
     else:
         gps_error_count = 0
 
     if (parsed_input['errors']['route'] is not None or
             not parsed_input['errors']['photo_ok'] or
-            parsed_input['errors']['microbit'] is not None):
+            parsed_input['errors']['microbit'] is not None or
+            gps_error_count > 20):
         s['parsed_input']['errors'] = parsed_input['errors']
         s['write_data_to_disk'] = False
         s['start_new_data_batch'] = False
         s['parsed_input']['timestamp'] = parsed_input['timestamp']
         return s
+
+    if parsed_input['errors']['gps_position'] is None:
+        position = parsed_input['gps_position']
+    else:
+        position = s['position']
+
+    if parsed_input['errors']['gps_speed'] is None:
+        speed = parsed_input['gps_speed']
+    else:
+        speed = s['speed']
 
     # Toggle changing, with (oldToggle, buttonPressed) = newToggle
     # 1, 1 = 0
@@ -371,7 +430,7 @@ def update_state(s: State, parsed_input: ParsedInput) -> State:
     else:
         destination = s['destination']
 
-    arrived = is_close(parsed_input['gps'], destination)
+    arrived = is_close(position, destination)
 
     just_arrived = not s['arrived'] and arrived
 
@@ -391,6 +450,8 @@ def update_state(s: State, parsed_input: ParsedInput) -> State:
 
     return {
         'gps_error_count': gps_error_count,
+        'position': position,
+        'speed': speed,
         'data_directory': data_directory,
         'button_A_toggle': buttonAtoggle,
         'destination': destination,
@@ -402,20 +463,32 @@ def update_state(s: State, parsed_input: ParsedInput) -> State:
         'arrived': arrived}
 
 
-def read_gps(gps_serial_port) -> Tuple[str, plan_route.MapPosition]:
+def read_gps(gps_serial_port) -> Tuple[str, GpsReading]:
     """
     It tries several times to read the GPS receiver and get a valid
     reading.
     """
-    err = 'not None'
-    if gps_serial_port.inWaiting() < 500:
-        return 'Buffer not full enough.', None
+    reading: GpsReading = {
+        'speed': None,
+        'speed_error': 'No speed reading available.',
+        'position': None,
+        'position_error': 'No position reading available.'
+    }
+    waiting = gps_serial_port.inWaiting()
+    if waiting < 500:
+        return 'Buffer not full enough.', reading
     for _ in range(14):
         raw = gps_serial_port.readline()
-        err, parsed = parse_gps_reading(raw)
-        if err is None:
-            return None, parsed
-    return err, None
+        if reading['speed_error'] is not None:
+            reading['speed_error'], reading['speed'] = (
+                parse_gps_speed_reading(raw))
+        if reading['position_error'] is not None:
+            reading['position_error'], reading['position'] = (
+                parse_gps_position_reading(raw))
+        if (reading['speed_error'] is None and
+                reading['position_error'] is None):
+            break
+    return None, reading
 
 
 def read_microbit(microbit_serial_port) -> Tuple[str, MicrobitReading]:
@@ -434,6 +507,7 @@ def read_microbit(microbit_serial_port) -> Tuple[str, MicrobitReading]:
 def read_input(
         position: plan_route.MapPosition,
         destination: plan_route.MapPosition,
+        brand_new_destination: bool,
         webcam_handle,
         gps_serial_port,
         microbit_serial_port) -> RawInput:
@@ -447,17 +521,17 @@ def read_input(
     # the old data left in the buffer.
     # gps_serial_port.reset_input_buffer()
     # microbit_serial_port.reset_input_buffer()
-    destination = make_random_destination()
-    mb = read_microbit(microbit_serial_port)
-    gps = read_gps(gps_serial_port)
-    route = plan_route.main(position, destination)
+    if brand_new_destination:
+        random_destination = make_random_destination()
+    else:
+        random_destination = None, destination
     result: RawInput = {
-        'err_and_microbit': mb,
-        'err_and_gps': gps,
+        'err_and_microbit': read_microbit(microbit_serial_port),
+        'err_and_gps': read_gps(gps_serial_port),
         'err_and_colour_photo': webcam_handle.read(),
         'timestamp': time.time(),
-        'random_destination': destination,
-        'err_and_target_direction': route}
+        'err_and_random_destination': random_destination,
+        'err_and_target_direction': plan_route.main(position, destination)}
     return result
 
 
@@ -472,14 +546,13 @@ def send_output(output: Output, microbit_port):
     if output['start_new_data_batch']:
         os.makedirs(output['data_directory'] + '/photos')
     if output['write_data_to_disk']:
-        write2file(output['parsed_input'], output['data_directory'])
-    print('display is {}'.format(output['display']))
+        write2file(output['parsed_input'], output['destination'],
+                   output['data_directory'])
     microbit_port.write([output['display']])
     errors = output['parsed_input']['errors']
     # if at_least_one_error(output['parsed_input']['errors']):
     if (errors['route'] is not None or not errors['photo_ok']
             or errors['microbit'] is not None):
-        print(output['parsed_input']['errors'])
         with open('error_log.txt', 'a') as error_file:
             error_file.write(json.dumps(
                 {'timestamp': output['parsed_input']['timestamp'],
@@ -491,11 +564,15 @@ def main():
     It runs the main loop which runs continuously and does everything.
     """
 
-    destination = make_random_destination()
+    destination_error, destination = make_random_destination()
+    position = plan_route.MapPosition(latitude=50.289658,
+                                      longitude=-3.7740055)
     state: State = {
         'gps_error_count': 0,
         'data_directory': 'realData/{}'.format(time.time()),
         'button_A_toggle': False,
+        'speed': 0,
+        'position': position,
         'recording_state': RecordingState.OFF_PAUSED,
         'brand_new_destination': False,
         'destination': destination,
@@ -506,14 +583,17 @@ def main():
                 'compass': 0.0,
                 'buttonAcounter': 0,
                 'buttonBcounter': 0},
-            'gps': plan_route.MapPosition(
-                latitude=50.289658, longitude=-3.7740055),
+            'gps_position': position,
+            'gps_speed': 0,
             'timestamp': 0,
             'target_direction': 0,
             'errors': {
                 'route': None,
-                'gps': None,
+                'gps_position': None,
+                'gps_speed': None,
+                'gps_buffer_too_small': None,
                 'photo_ok': True,
+                'random_destination': destination_error,
                 'microbit': None},
             'random_destination': destination},
         'start_new_data_batch': False,
@@ -524,18 +604,17 @@ def main():
 
     with serial.Serial('/dev/ttyACM0', baudrate=115200) as gps_port, \
             serial.Serial('/dev/ttyACM1', baudrate=115200) as microbit_port:
-        counter = 0
         while True:
-            print('counter is {}'.format(counter))
             send_output(state2output(state), microbit_port)
             raw_input_data = read_input(
-                state['parsed_input']['gps'],
+                state['position'],
                 state['destination'],
+                state['brand_new_destination'],
                 webcam_handle,
                 gps_port,
                 microbit_port)
             state = update_state(state, parse_input(raw_input_data))
-            counter += 1
+            print('hey')
 
 
 main()
