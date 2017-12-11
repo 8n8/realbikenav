@@ -209,6 +209,7 @@ def parse_gps_speed_reading(line_of_output: bytes) -> Tuple[str, float]:
 def write2file(
         parsed_input: ParsedInput,
         destination: plan_route.MapPosition,
+        speed: float,
         directory: str):
     """
     It writes the sensor readings to disk. The numeric data is converted
@@ -218,7 +219,8 @@ def write2file(
     json4file = json.dumps(
         {'microbit': parsed_input['microbit'],
          'destination': destination,
-         'gps_speed': parsed_input['gps_speed'],
+         'speed': speed,
+         'gps_speed_reading': parsed_input['gps_speed'],
          'gps_position': parsed_input['gps_position'],
          'timestamp': parsed_input['timestamp'],
          'target_direction': parsed_input['target_direction']})
@@ -259,6 +261,7 @@ RECORDING_STATE_CODES = {
 class Output(TypedDict):
     """ The data to send to the outputs. """
     start_new_data_batch: bool
+    speed: float
     data_directory: str
     write_data_to_disk: bool
     parsed_input: ParsedInput
@@ -276,6 +279,7 @@ def state2output(state: State) -> Output:
         'write_data_to_disk': state['write_data_to_disk'],
         'parsed_input': state['parsed_input'],
         'destination': state['destination'],
+        'speed': state['speed'],
         'display': calculate_view(
             state['gps_error_count'],
             state['parsed_input']['errors'],
@@ -547,7 +551,7 @@ def send_output(output: Output, microbit_port):
         os.makedirs(output['data_directory'] + '/photos')
     if output['write_data_to_disk']:
         write2file(output['parsed_input'], output['destination'],
-                   output['data_directory'])
+                   output['speed'], output['data_directory'])
     microbit_port.write([output['display']])
     errors = output['parsed_input']['errors']
     # if at_least_one_error(output['parsed_input']['errors']):
@@ -614,7 +618,7 @@ def main():
                 gps_port,
                 microbit_port)
             state = update_state(state, parse_input(raw_input_data))
-            print('hey')
+            print(state['parsed_input']['grey_photo'].shape)
 
 
 main()
