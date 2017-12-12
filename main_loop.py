@@ -606,8 +606,9 @@ def main():
 
     webcam_handle = cv2.VideoCapture(0)
 
-    with serial.Serial('/dev/ttyACM0', baudrate=115200) as gps_port, \
-            serial.Serial('/dev/ttyACM1', baudrate=115200) as microbit_port:
+    with serial.Serial('/dev/ttyACM1', baudrate=115200) as gps_port, \
+            serial.Serial('/dev/ttyACM0', baudrate=115200) as microbit_port:
+        counter = 0
         while True:
             send_output(state2output(state), microbit_port)
             raw_input_data = read_input(
@@ -618,7 +619,8 @@ def main():
                 gps_port,
                 microbit_port)
             state = update_state(state, parse_input(raw_input_data))
-            print(state['parsed_input']['grey_photo'].shape)
+            print(counter)
+            counter += 1
 
 
 main()

@@ -3,8 +3,9 @@ It loads the bike navigation data and trains the neural network with it.
 """
 
 import json
+import math
 import os
-from typing import List, Set
+from typing import List, Set, Tuple
 
 import cv2  # type: ignore
 import keras  # type: ignore
@@ -37,6 +38,7 @@ class RawDataBatch(TypedDict):
     """
     json_data: str
     photos: List[Photo]
+    not_enough_data: bool
 
 
 def read_batch(state: State) -> RawDataBatch:
@@ -49,19 +51,23 @@ def read_batch(state: State) -> RawDataBatch:
     photo_file_names = os.listdir(
         'realData/{}/photos'.format(state['current_directory']))
     photos: List[Photo] = [
-        {'photo': cv2.imread('realData/{}/photos/{}'.format(
-            state['current_directory'], photo_file_name)),
+        {'photo': cv2.imread(
+            'realData/{}/photos/{}'.format(
+                state['current_directory'], photo_file_name),
+            cv2.IMREAD_GRAYSCALE),
          'filename': photo_file_name}
         for photo_file_name in photo_file_names]
 
-    return {'json_data': json_data, 'photos': photos}
+    return {
+        'json_data': json_data,
+        'photos': photos,
+        'not_enough_data': len(photo_file_names) < 16}
 
 
 class ParsedDataBatch(TypedDict):
     """ A batch of data ready to feed into the neural network. """
-    actual_direction: 'np.ndarray[np.float32]'
+    velocity_change: 'np.ndarray[np.float32]'
     target_direction: 'np.ndarray[np.float32]'
-    speed: 'np.ndarray[np.float32]'
     photos: 'np.ndarray[np.uint8]'
 
 
@@ -76,22 +82,31 @@ def update_state(state: State) -> State:
 def parse_data_batch(raw: RawDataBatch) -> ParsedDataBatch:
     """
     It converts the raw input data into numpy arrays suitable for feeding
-    into the neural network trainer.
+    into the neural network trainer.  There are 5 or 6 frames per second.
+    The GPS runs at about 1 reading per second.
     """
     lines_of_json = [
-        json.loads(line) for line in raw['json_data'].splitlines()]
+        json.loads(line) for line in raw['json_data'].splitlines()][5:]
+    directions = [float(j['microbit']['compass']) for j in lines_of_json]
+    direction_changes = [
+        new - old for new, old in zip(directions[10:], directions[:-10])]
+    normalised_dir_changes = [d/2*math.pi for d in direction_changes]
+    speeds = [float(j['speed']) for j in lines_of_json]
+    speed_changes = [
+        new - old for new, old in zip(speeds[10:], directions[:-10])]
+    normalised_speed_changes = [s/20 for s in speed_changes]
+    target_directions = [j['target_direction'] for j in lines_of_json][:-10]
     return {
-        'actual_direction':
-            np.array([float(j['microbit']['compass']) for j in lines_of_json[3:]]),
-        'target_direction':
-            np.array([float(j['target_direction'])
-                      for j in lines_of_json[3:]]),
-        'speed':
-            np.array([float(j['speed']) for j in lines_of_json]),
+        'target_direction': np.array(target_directions),
+        'velocity_change': np.stack(  # type: ignore
+            (np.array(normalised_speed_changes),
+             np.array(normalised_dir_changes)),
+            axis=1),
         'photos':
             np.stack(  # type: ignore
-                (np.array([p['photo'] for p in raw['photos'][2:-1]]),
-                 np.array([p['photo'] for p in raw['photos'][:-3]])))}
+                (np.array([p['photo'] for p in raw['photos'][5:-10]]),
+                 np.array([p['photo'] for p in raw['photos'][:-15]])),
+                axis=3)}
 
 
 def data_loader():
@@ -106,9 +121,12 @@ def data_loader():
         'current_directory': data_dirs[0]}
     while carry_on_running(state):
         raw_data_batch = read_batch(state)
-        parsed_data = parse_data_batch(raw_data_batch)
+        if not raw_data_batch['not_enough_data']:
+            parsed_data = parse_data_batch(raw_data_batch)
+            yield ({'photos': parsed_data['photos'],
+                    'target_direction': parsed_data['target_direction']},
+                   parsed_data['velocity_change'])
         state = update_state(state)
-        yield parsed_data
 
 
 def load_network():
@@ -142,46 +160,50 @@ def load_network():
         layer1(bn()(photos)))))))))))
     target_direction = keras.layers.Input(
         shape=(1,), name='target_direction')
-    actual_direction = keras.layers.Input(
-        shape=(1,), name='actual_direction')
     dense_input = keras.layers.concatenate(
-        [conv_out, actual_direction, target_direction])
+        [conv_out, target_direction])
     layer6 = dense(1000, activation='relu')
     layer7 = dense(100, activation='relu')
     layer8 = dense(50, activation='relu')
     layer9 = dense(10, activation='relu')
-    layer10 = dense(2, activation='relu')
+    layer10 = dense(2, activation='softmax')
     dense_out = layer10(bn()(layer9(bn()(layer8(bn()(layer7(bn()(layer6(
         dense_input)))))))))
     return keras.models.Model(
-        inputs=[photos, target_direction, actual_direction],
+        inputs=[photos, target_direction],
         outputs=[dense_out])
 
 
-def find_number_of_data_points() -> int:
+def find_number_of_data_batches_and_points() -> Tuple[int, int]:
     """ It counts the number of data points in the whole data batch. """
     batch_directories = os.listdir('realData')
-    answer = 0
+    batches = 0
+    data_points = 0
     for directory in batch_directories:
         number_of_photos_in_batch = len(os.listdir(
             'realData/{}/photos'.format(directory)))
-        data_points_in_batch = max(0, number_of_photos_in_batch - 2)
-        answer += data_points_in_batch
-    return answer
+        data_points_in_batch = max(0, number_of_photos_in_batch - 15)
+        if data_points_in_batch > 0:
+            batches += 1
+            data_points += data_points_in_batch
+    return batches, data_points
 
 
 def main():
     """
     It loads the neural network, loads the data, and trains the net.
     """
-    number_of_data_points = find_number_of_data_points()
+    num_batches, num_data_points = find_number_of_data_batches_and_points()
+    print("Number of data points is {}.".format(num_data_points))
+    print("Number of data batches is {}.".format(num_batches))
     neural_network = load_network()
     neural_network.compile(
         loss='categorical_crossentropy',
         optimizer=keras.optimizers.Adam(),
         metrics=['accuracy'])
     neural_network.fit_generator(
-        data_loader(), steps_per_epoch=number_of_data_points)
+        data_loader(), steps_per_epoch=num_batches)
+    neural_network.save('nav_net.h5')
 
 
 main()
