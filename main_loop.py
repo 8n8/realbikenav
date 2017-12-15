@@ -604,7 +604,7 @@ def main():
         'write_data_to_disk': False,
         'arrived': False}
 
-    webcam_handle = cv2.VideoCapture(0)
+    webcam_handle = cv2.VideoCapture(1)
 
     with serial.Serial('/dev/ttyACM1', baudrate=115200) as gps_port, \
             serial.Serial('/dev/ttyACM0', baudrate=115200) as microbit_port:

@@ -95,7 +95,10 @@ def parse_route(
 def parse_snap_response(raw_response: str) -> MapPosition:
     """ It extracts the first location from the snap response. """
     as_json = json.loads(raw_response)
-    if len(as_json['waypoints']) > 1:
+    number_of_waypoints: int = len(as_json['waypoints'])
+    if number_of_waypoints > 2:
+        raw_position = as_json['waypoints'][2]['location']
+    elif number_of_waypoints > 1:
         raw_position = as_json['waypoints'][1]['location']
     else:
         raw_position = as_json['waypoints'][0]['location']

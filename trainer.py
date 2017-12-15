@@ -5,6 +5,7 @@ It loads the bike navigation data and trains the neural network with it.
 import json
 import math
 import os
+import sys
 from typing import List, Set, Tuple
 
 import cv2  # type: ignore
@@ -123,6 +124,7 @@ def data_loader():
         raw_data_batch = read_batch(state)
         if not raw_data_batch['not_enough_data']:
             parsed_data = parse_data_batch(raw_data_batch)
+            print('Batch size is {}'.format(sys.getsizeof(parsed_data)))
             yield ({'photos': parsed_data['photos'],
                     'target_direction': parsed_data['target_direction']},
                    parsed_data['velocity_change'])
