@@ -6,7 +6,7 @@ road map, given the coordinates of the start and end points.
 
 import json
 import math
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Tuple, List
 import requests
 
 
@@ -67,17 +67,62 @@ def vector_angle_to_north(v: MapPosition) -> Tuple[str, float]:
     magnitude: float = (v.longitude**2 + v.latitude**2)**0.5
     if math.isclose(magnitude, 0):
         return "Vector has zero magnitude.", None
-    angle = math.acos(v.latitude / magnitude)
-    if v.longitude < 0:
-        angle = 2*math.pi - angle
+    angle = math.acos(v.longitude / magnitude)
     return None, angle
+
+
+EARTH_RADIUS: float = 6371e3
+
+
+def distance_between(a: MapPosition, b: MapPosition) -> float:
+    """
+    It calculates the distance in metres between two map points, each
+    specified by a latitude and longitude.
+
+    This formula is taken from
+
+    https://www.movable-type.co.uk/scripts/latlong.html
+
+    A copy of the html of the page is in the file
+    DistanceBetweenPoints.html.
+    """
+    phi1: float = math.radians(a.latitude)
+    phi2: float = math.radians(b.latitude)
+    delta_phi: float = phi2 - phi1
+    delta_lambda: float = math.radians(b.longitude - a.longitude)
+    aa: float = (
+        math.sin(delta_phi/2)**2 + math.cos(phi1) * math.cos(phi2)
+        * math.sin(delta_lambda/2)**2)
+    c: float = 2 * math.atan2(math.sqrt(aa), math.sqrt(1 - aa))
+    return EARTH_RADIUS * c
+
+
+def segment_30_metres_away(
+        points: List[List[float]]) -> Tuple[str, MapPosition, MapPosition]:
+    """
+    Given a list of the coordinates of the route, it finds the ones that
+    are the start and end points of the segment that is 30 metres away.
+    """
+    distance: float = 0
+    len_points = len(points)
+    if len_points < 2:
+        return 'Less than two points in the list.', None, None
+    for i, point in enumerate(points[1:]):
+        stop = MapPosition(latitude=point[0], longitude=point[1])
+        start = MapPosition(latitude=points[i][0], longitude=points[i][1])
+        length = distance_between(start, stop)
+        distance += length
+        if distance > 30:
+            break
+    return None, start, stop
 
 
 def parse_route(
         raw_route: str) -> Tuple[str, MapPosition, MapPosition]:
     """
     It decodes the json string containing the route plan, and extracts
-    the coordinates of the ends of the first segment of it.
+    the coordinates of the ends of the segment of it that is 30 metres
+    away from the start.
     """
     route_as_dict = json.loads(raw_route)
     if 'code' not in route_as_dict:
@@ -87,21 +132,14 @@ def parse_route(
                 None,
                 None)
     points = route_as_dict['routes'][0]['geometry']['coordinates']
-    return (None,
-            MapPosition(longitude=points[0][0], latitude=points[0][1]),
-            MapPosition(longitude=points[1][0], latitude=points[1][1]))
+    result = segment_30_metres_away(points)
+    return result
 
 
 def parse_snap_response(raw_response: str) -> MapPosition:
     """ It extracts the first location from the snap response. """
     as_json = json.loads(raw_response)
-    number_of_waypoints: int = len(as_json['waypoints'])
-    if number_of_waypoints > 2:
-        raw_position = as_json['waypoints'][2]['location']
-    elif number_of_waypoints > 1:
-        raw_position = as_json['waypoints'][1]['location']
-    else:
-        raw_position = as_json['waypoints'][0]['location']
+    raw_position = as_json['waypoints'][0]['location']
     return MapPosition(
         longitude=float(raw_position[0]),
         latitude=float(raw_position[1]))
@@ -117,7 +155,9 @@ def calculate_direction(raw_route: str) -> Tuple[str, float]:
     diff: MapPosition = MapPosition(
         longitude=end.longitude - start.longitude,  # type: ignore
         latitude=end.latitude - start.latitude)  # type: ignore
+    print('diff is {}'.format(diff))
     err, angle = vector_angle_to_north(diff)
+    print('angle is {}'.format(angle))
     if err is not None:
         return "The first two nodes in the route are identical.", None
     return None, angle

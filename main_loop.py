@@ -54,18 +54,116 @@ class MicrobitReading(TypedDict):
     buttonBcounter: int
 
 
+class Error(TypedDict):
+    msg: str
+    num: int
+
+
 class Errors(TypedDict):
     """
     It contains all the error messages arising from reading the sensors and
     calculating the route.
     """
-    route: str
-    gps_speed: str
-    gps_position: str
-    gps_buffer_too_small: str
-    photo_ok: bool
-    microbit: str
-    random_destination: str
+    route: Error
+    gps_speed: Error
+    gps_position: Error
+    gps_buffer_too_small: Error
+    photo: Error
+    microbit: Error
+    random_destination: Error
+
+
+class ErrorResponse(TypedDict):
+    log_messages: List[str]
+    led_error: bool
+    stop_program: bool
+
+
+# The number of consecutive GPS errors that is acceptable before failing.
+GPS_ERROR_TOLERANCE: int = 14
+
+
+def error_handler(errors: Errors) -> Tuple[Errors, ErrorResponse]:
+    """
+    It updates the error counts, makes the error log messages, decides
+    whether to flash the error LEDs and decides whether to end the program.
+    """
+    log_messages = []
+    led_error = None
+    stop_program = False
+
+    if errors['route'] is not None:
+        errors['route']['num'] += 1
+        log_messages.append('route: ' + errors['route']['msg'])
+        led_error = True
+        if errors['route']['num'] > 6:
+            stop_program = True
+    else:
+        errors['route']['num'] = 0
+
+    if errors['gps_speed'] is not None:
+        errors['gps_speed']['num'] += 1
+        if errors['gps_speed']['num'] > GPS_ERROR_TOLERANCE: 
+            stop_program = True
+            led_error = True
+            log_messages.append('gps_speed: ' + errors['gps_speed']['msg'])
+    else:
+        errors['gps_speed']['num'] = 0
+
+    if errors['gps_position'] is not None:
+        errors['gps_position']['num'] += 1
+        if errors['gps_position']['num'] > GPS_ERROR_TOLERANCE: 
+            stop_program = True
+            led_error = True
+            log_messages.append(
+                'gps_position: ' + errors['gps_position']['msg'])
+    else:
+        errors['gps_position']['num'] = 0
+
+    if errors['gps_buffer_too_small'] is not None:
+        errors['gps_buffer_too_small']['num'] += 1
+        if errors['gps_buffer_too_small']['num'] > GPS_ERROR_TOLERANCE:
+            stop_program = True
+            led_error = True
+            log_messages.append(
+                'gps_buffer_too_small: ' + errors['gps_buffer']['msg'])
+    else:
+        errors['gps_buffer']['num'] = 0
+
+    if errors['photo'] is not None:
+        errors['photo']['num'] += 1
+        if errors['photo']['num'] > 1:
+            log_messages.append('photo: ' + errors['photo']['msg'])
+        if errors['photo']['num'] > 3:
+            stop_program = True
+            led_error = True
+    else:
+        errors['photo']['num'] = 0
+
+    if errors['microbit'] is not None:
+        errors['microbit']['num'] += 1
+        if errors['microbit']['num'] > 12:
+            stop_program = True
+            led_error = True
+            log_messages.append('microbit: ' + errors['microbit']['msg'])
+    else:
+        errors['microbit']['num'] = 0
+
+    if errors['random_destination'] is not None:
+        errors['random_destination']['num'] += 1
+        log_messages.append(
+            'random_destination: ' + errors['random_destination']['msg'])
+        if errors['random_destination']['num'] > 10:
+            stop_program = True
+            led_error = True
+    else:
+        errors['random_destination']['num'] = 0
+
+    return (
+        errors,
+        {'log_messages': log_messages,
+         'led_error': led_error,
+         'stop_program': stop_program})
 
 
 class ParsedInput(TypedDict):
@@ -78,6 +176,106 @@ class ParsedInput(TypedDict):
     target_direction: float
     errors: Errors
     random_destination: plan_route.MapPosition
+
+
+class KalmanState(TypedDict):
+    """
+    It contains the latest estimate of the state vector and the error
+    covariance matrix.
+    """
+    # x contains the speed, directon, latitude and longitude
+    x: 'np.ndarray[np.float64]'
+    P: 'np.ndarray[np.float64]'
+
+
+def delta_position(
+        speed: float,
+        timestep: float,
+        direction: float,
+        position: plan_route.MapPosition) -> plan_route.MapPosition:
+    """ It estimates the change in position from the speed. """
+    metres_per_degree_lat: float = abs(plan_route.distance_between(
+        position,
+        plan_route.MapPosition(
+            latitude=position.latitude + 1,
+            longitude=position.longitude)))
+    lat_degrees_per_metre: float = 1 / metres_per_degree_lat
+    metres_per_degree_lon: float = abs(plan_route.distance_between(
+        position,
+        plan_route.MapPosition(
+            latitude=position.latitude,
+            longitude=position.longitude + 1)))
+    lon_degrees_per_metre: float = 1 / metres_per_degree_lon
+    lat_speed: float = math.sin(direction)
+    lon_speed: float = math.cos(direction)
+    return {
+        'latitude': lat_speed * lat_degrees_per_metre * timestep,
+        'longitude': lon_speed * lon_degrees_per_metre * timestep}
+
+
+LENGTH_OF_DEGREE_LATITUDE: float = 111000  # metres
+
+
+def kalman_filter(
+        state: KalmanState,
+        gps_speed: float,
+        compass: float,
+        timestep: float,
+        gps_position: plan_route.MapPosition) -> KalmanState:
+    """ It updates the state using a Kalman filter. """
+    # x contains the speed, direction, latitude and longitude
+    length_of_degree_longitude: float = (
+        math.cos(gps_position.latitude) * 111000)  # metres
+    xk_1k_1 = state['x']
+    Pk_1k_1 = state['P']
+    # Predicted new latitude is:
+    #  old_lat + cos(direction) * speed * degrees_lat_per_metre * timestep
+    lat_speed_multiplier: float = (
+        timestep * math.cos(xk_1k_1[1]) / LENGTH_OF_DEGREE_LATITUDE)
+    # Predicted new longitude is:
+    #  old_lon + sin(direction) * speed * degrees_lon_per_metre * timestep
+    lon_speed_multiplier: float = (
+        timestep * math.sin(xk_1k_1[1]) / length_of_degree_longitude)
+    Fk = np.array([
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [lat_speed_multiplier, 0, 1, 0],
+        [lon_speed_multiplier, 0, 0, 1]])
+    xkk_1 = np.matmul(Fk, xk_1k_1)
+
+    if gps_speed is None:
+        speed = xkk_1[0]
+    else:
+        speed = gps_speed
+
+    if compass is None:
+        direction = xkk_1[1]
+    else:
+        direction = compass
+
+    if gps_position is None:
+        latitude = xkk_1[2]
+        longitude = xkk_1[3]
+    else:
+        latitude = gps_position['latitude']
+        longitude = gps_position['longitude']
+
+    zk = np.array([speed, direction, latitude, longitude])
+    identity = np.array([
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1]])
+    Qk = identity
+    Hk = identity
+    Rk = identity
+    Pkk_1 = np.matmul(Fk, np.matmul(Pk_1k_1, Fk.T)) + Qk
+    Sk = Rk + np.matmul(Hk, np.matmul(Pkk_1, np.linalg.inv(Hk)))
+    Kk = np.matmul(Pkk_1, np.matmul(Hk.T, np.linalg.inv(Sk)))
+    yk = zk - np.matmul(Hk, xkk_1)
+    return {
+        'x': xkk_1 + np.matmul(Kk, yk),
+        'P': Pkk_1 - np.matmul(Kk, np.matmul(Hk, Pkk_1))}
 
 
 class State(TypedDict):
@@ -97,6 +295,7 @@ class State(TypedDict):
     start_new_data_batch: bool
     write_data_to_disk: bool
     arrived: bool
+    kalman_state: KalmanState
 
 
 class RawInput(TypedDict):
@@ -247,9 +446,7 @@ def is_close(a: plan_route.MapPosition, b: plan_route.MapPosition) -> bool:
     It decides if two map positions are close, roughly within a few metres
     of each other.
     """
-    return (
-        (a.longitude - b.longitude)**2 + (a.latitude - b.latitude)**2
-        < 0.00000001)
+    return plan_route.distance_between(a, b) < 20
 
 
 RECORDING_STATE_CODES = {
@@ -382,6 +579,12 @@ def update_state(s: State, parsed_input: ParsedInput) -> State:
     It calculates the new state, given the existing one, the sensor
     readings, a new random destination, and the target direction.
     """
+    kalman_state = kalman_filter(
+        s['kalman_state'],
+        parsed_input['gps_speed'],
+        parsed_input['microbit']['compass'],
+        parsed_input['timestamp'] - s['timestamp'])
+
     gps_error = (
         parsed_input['errors']['gps_position'] is not None or
         parsed_input['errors']['gps_speed'] is not None or
@@ -454,6 +657,7 @@ def update_state(s: State, parsed_input: ParsedInput) -> State:
 
     return {
         'gps_error_count': gps_error_count,
+        'kalman_state': ,
         'position': position,
         'speed': speed,
         'data_directory': data_directory,
@@ -602,12 +806,15 @@ def main():
             'random_destination': destination},
         'start_new_data_batch': False,
         'write_data_to_disk': False,
+        'kalman_state': {
+            'x': np.zeros((4, 1)),
+            'P': np.zeros((4, 4))},
         'arrived': False}
 
     webcam_handle = cv2.VideoCapture(1)
 
-    with serial.Serial('/dev/ttyACM1', baudrate=115200) as gps_port, \
-            serial.Serial('/dev/ttyACM0', baudrate=115200) as microbit_port:
+    with serial.Serial('/dev/ttyACM0', baudrate=115200) as gps_port, \
+            serial.Serial('/dev/ttyACM1', baudrate=115200) as microbit_port:
         counter = 0
         while True:
             send_output(state2output(state), microbit_port)
