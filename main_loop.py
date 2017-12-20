@@ -273,6 +273,7 @@ class State(TypedDict):
     It represents the state that has to be carried between runs of the
     main loop.
     """
+    counter: int
     data_directory: str
     direction: float
     speed: float
@@ -441,6 +442,7 @@ RECORDING_STATE_CODES = {
 
 class Output(TypedDict):
     """ The data to send to the outputs. """
+    counter: int
     start_new_data_batch: bool
     speed: float
     data_directory: str
@@ -456,6 +458,7 @@ def state2output(state: State) -> Output:
     It converts the state into the data needed for writing the output.
     """
     return {
+        'counter': state['counter'],
         'start_new_data_batch': state['start_new_data_batch'],
         'data_directory': state['data_directory'],
         'write_data_to_disk': state['write_data_to_disk'],
@@ -624,6 +627,7 @@ def update_state(s: State, parsed_input: ParsedInput) -> State:
         data_directory = s['data_directory']
 
     return {
+        'counter': s['counter'] + 1,
         'kalman_state': kalman_state,
         'position': position,
         'error_response': error_response,
@@ -651,8 +655,7 @@ def read_gps(gps_serial_port) -> Tuple[str, GpsReading]:
         'speed': None,
         'speed_error': 'No speed reading available.',
         'position': None,
-        'position_error': 'No position reading available.'
-    }
+        'position_error': 'No position reading available.'}
     waiting = gps_serial_port.inWaiting()
     if waiting < 500:
         return 'Buffer not full enough.', reading
@@ -675,9 +678,16 @@ def read_microbit(microbit_serial_port) -> Tuple[str, MicrobitReading]:
     It tries several times to read the microbit and get a valid reading.
     """
     err = 'could not get valid microbit reading'
+    while True:
+        print('inwaiting is {}'.format(microbit_serial_port.inWaiting()))
+        time.sleep(1)
     for _ in range(3):
+        print('read_microbit1')
+        print('inwaiting is {}'.format(microbit_serial_port.inWaiting()))
         raw = microbit_serial_port.readline()
+        print('read_microbit2')
         err, parsed = parse_microbit_reading(raw)
+        print('read_microbit3')
         if err is None:
             return None, parsed
     return err, None
@@ -700,18 +710,21 @@ def read_input(
     # the old data left in the buffer.
     # gps_serial_port.reset_input_buffer()
     # microbit_serial_port.reset_input_buffer()
+    print('1')
     if brand_new_destination:
         random_destination = make_random_destination()
     else:
         random_destination = None, destination
-    result: RawInput = {
+    print('2')
+    x = read_microbit(microbit_serial_port)
+    print('3')
+    return {
         'err_and_microbit': read_microbit(microbit_serial_port),
         'err_and_gps': read_gps(gps_serial_port),
         'err_and_colour_photo': webcam_handle.read(),
         'timestamp': time.time(),
         'err_and_random_destination': random_destination,
         'err_and_target_direction': plan_route.main(position, destination)}
-    return result
 
 
 def empty(L: List[Any]) -> bool:
@@ -724,28 +737,28 @@ def empty(L: List[Any]) -> bool:
 
 def send_output(output: Output, microbit_port):
     """ It sends out the output to the file system and the microbit. """
+    print(output['counter'])
     if output['start_new_data_batch']:
         os.makedirs(output['data_directory'] + '/photos')
     if output['write_data_to_disk']:
         write2file(output['parsed_input'], output['destination'],
                    output['speed'], output['data_directory'])
     microbit_port.write([output['display']])
-    if empty(output['error_response']['log_messages']):
+    if not empty(output['error_response']['log_messages']):
+        print(output['error_response']['log_messages'])
         with open('error_log.txt', 'a') as error_file:
             error_file.write(json.dumps(
                 {'timestamp': output['parsed_input']['timestamp'],
                  'errors': output['error_response']['log_messages']}) + '\n')
 
 
-def main():
-    """
-    It runs the main loop which runs continuously and does everything.
-    """
-
+def initial_state() -> State:
+    """ It creates the initial state. """
     destination_error, destination = make_random_destination()
     position = plan_route.MapPosition(latitude=50.289658,
                                       longitude=-3.7740055)
-    state: State = {
+    return {
+        'counter': 0,
         'data_directory': 'realData/{}'.format(time.time()),
         'error_response': {
             'log_messages': [],
@@ -794,12 +807,17 @@ def main():
             'P': np.zeros((4, 4))},
         'arrived': False}
 
-    webcam_handle = cv2.VideoCapture(1)
 
+def main():
+    """
+    It runs the main loop which runs continuously and does everything.
+    """
+    state: State = initial_state()
+    webcam_handle = cv2.VideoCapture(1)
     with serial.Serial('/dev/ttyACM0', baudrate=115200) as gps_port, \
             serial.Serial('/dev/ttyACM1', baudrate=115200) as microbit_port:
-        counter = 0
         while not state['error_response']['stop_program']:
+            print('here')
             raw_input_data = read_input(
                 state['position'],
                 state['destination'],
@@ -807,10 +825,9 @@ def main():
                 webcam_handle,
                 gps_port,
                 microbit_port)
+            print('there')
             state = update_state(state, parse_input(raw_input_data))
             send_output(state2output(state), microbit_port)
-            print(counter)
-            counter += 1
 
 
 main()
