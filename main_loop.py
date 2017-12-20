@@ -101,7 +101,7 @@ def error_handler(
     whether to flash the error LEDs and decides whether to end the program.
     """
     log_messages = []
-    led_error = None
+    led_error = False
     stop_program = False
 
     if errors['route'] is not None:
@@ -208,11 +208,12 @@ def kalman_filter(
         gps_speed: float,
         compass: float,
         timestep: float,
+        position: plan_route.MapPosition,
         gps_position: plan_route.MapPosition) -> KalmanState:
     """ It updates the state using a Kalman filter. """
     # x contains the speed, direction, latitude and longitude
     length_of_degree_longitude: float = (
-        math.cos(gps_position.latitude) * 111000)  # metres
+        math.cos(position.latitude) * 111000)  # metres
     xk_1k_1 = state['x']
     Pk_1k_1 = state['P']
     # Predicted new latitude is:
@@ -233,23 +234,23 @@ def kalman_filter(
     xkk_1 = np.matmul(Fk, xk_1k_1)
 
     if gps_speed is None:
-        speed: float = xkk_1[0]  # type: ignore
+        speed: float = xkk_1[0][0]  # type: ignore
     else:
         speed = gps_speed
 
     if compass is None:
-        direction: float = xkk_1[1]  # type: ignore
+        direction: float = xkk_1[1][0]  # type: ignore
     else:
         direction = compass
 
     if gps_position is None:
-        latitude: float = xkk_1[2]  # type: ignore
-        longitude: float = xkk_1[3]  # type: ignore
+        latitude: float = xkk_1[2][0]  # type: ignore
+        longitude: float = xkk_1[3][0]  # type: ignore
     else:
         latitude = gps_position.latitude
         longitude = gps_position.longitude
 
-    zk = np.array([speed, direction, latitude, longitude])
+    zk = np.array([[speed], [direction], [latitude], [longitude]])
     identity = np.array([
         [1, 0, 0, 0],
         [0, 1, 0, 0],
@@ -313,7 +314,6 @@ def parse_microbit_reading(reading: bytes) -> Tuple[str, MicrobitReading]:
     as_string = reading.decode('utf-8')
     chunks = as_string.split()
     if len(chunks) != 6:
-        print(chunks)
         return "Byte array does not have exactly 24 elements.", None
     try:
         return (
@@ -327,7 +327,6 @@ def parse_microbit_reading(reading: bytes) -> Tuple[str, MicrobitReading]:
                 buttonAcounter=int(chunks[4]),
                 buttonBcounter=int(chunks[5])))
     except ValueError:
-        print(chunks)
         return "Could not convert to numeric.", None
 
 
@@ -400,8 +399,7 @@ def write2file(
     to json format and appended to a file, and the photo is put in a folder
     called 'photos'.
     """
-    json4file = json.dumps(
-        {'microbit': parsed_input['microbit'],
+    json4file = json.dumps({'microbit': parsed_input['microbit'],
          'destination': destination,
          'speed': speed,
          'gps_speed_reading': parsed_input['gps_speed'],
@@ -569,24 +567,26 @@ def update_state(s: State, parsed_input: ParsedInput) -> State:
     It calculates the new state, given the existing one, the sensor
     readings, a new random destination, and the target direction.
     """
-    kalman_state = kalman_filter(
-        s['kalman_state'],
-        parsed_input['gps_speed'],
-        parsed_input['microbit']['compass'],
-        parsed_input['timestamp'] - s['time_of_last_update'],
-        parsed_input['gps_position'])
 
     error_counters, error_response = error_handler(
         parsed_input['errors'],
         s['error_counters'])
 
-    speed: float = kalman_state['x'][0]  # type: ignore
+    kalman_state = kalman_filter(
+        s['kalman_state'],
+        parsed_input['gps_speed'],
+        parsed_input['microbit']['compass'],
+        parsed_input['timestamp'] - s['time_of_last_update'],
+        s['position'],
+        parsed_input['gps_position'])
 
-    direction: float = kalman_state['x'][1]  # type: ignore
+    speed: float = kalman_state['x'][0][0]  # type: ignore
+
+    direction: float = kalman_state['x'][1][0]  # type: ignore
 
     position: plan_route.MapPosition = plan_route.MapPosition(  # type: ignore
-        latitude=kalman_state['x'][2],  # type: ignore
-        longitude=kalman_state['x'][3])  # type: ignore
+        latitude=kalman_state['x'][2][0],  # type: ignore
+        longitude=kalman_state['x'][3][0])  # type: ignore
 
     buttonApressed: bool = (
         s['parsed_input']['microbit']['buttonAcounter'] !=
@@ -678,16 +678,9 @@ def read_microbit(microbit_serial_port) -> Tuple[str, MicrobitReading]:
     It tries several times to read the microbit and get a valid reading.
     """
     err = 'could not get valid microbit reading'
-    while True:
-        print('inwaiting is {}'.format(microbit_serial_port.inWaiting()))
-        time.sleep(1)
     for _ in range(3):
-        print('read_microbit1')
-        print('inwaiting is {}'.format(microbit_serial_port.inWaiting()))
         raw = microbit_serial_port.readline()
-        print('read_microbit2')
         err, parsed = parse_microbit_reading(raw)
-        print('read_microbit3')
         if err is None:
             return None, parsed
     return err, None
@@ -710,14 +703,11 @@ def read_input(
     # the old data left in the buffer.
     # gps_serial_port.reset_input_buffer()
     # microbit_serial_port.reset_input_buffer()
-    print('1')
     if brand_new_destination:
         random_destination = make_random_destination()
     else:
         random_destination = None, destination
-    print('2')
     x = read_microbit(microbit_serial_port)
-    print('3')
     return {
         'err_and_microbit': read_microbit(microbit_serial_port),
         'err_and_gps': read_gps(gps_serial_port),
@@ -817,7 +807,7 @@ def main():
     with serial.Serial('/dev/ttyACM0', baudrate=115200) as gps_port, \
             serial.Serial('/dev/ttyACM1', baudrate=115200) as microbit_port:
         while not state['error_response']['stop_program']:
-            print('here')
+            send_output(state2output(state), microbit_port)
             raw_input_data = read_input(
                 state['position'],
                 state['destination'],
@@ -825,9 +815,7 @@ def main():
                 webcam_handle,
                 gps_port,
                 microbit_port)
-            print('there')
             state = update_state(state, parse_input(raw_input_data))
-            send_output(state2output(state), microbit_port)
 
 
 main()

@@ -155,9 +155,7 @@ def calculate_direction(raw_route: str) -> Tuple[str, float]:
     diff: MapPosition = MapPosition(
         longitude=end.longitude - start.longitude,  # type: ignore
         latitude=end.latitude - start.latitude)  # type: ignore
-    print('diff is {}'.format(diff))
     err, angle = vector_angle_to_north(diff)
-    print('angle is {}'.format(angle))
     if err is not None:
         return "The first two nodes in the route are identical.", None
     return None, angle

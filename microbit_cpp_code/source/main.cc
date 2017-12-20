@@ -56,9 +56,13 @@ void parse_display(const char &raw_display, leds &display) {
 
 // It reads all the inputs.
 void read_input(InputData &input_data) {
-    parse_display(
-        uBit.serial.read(1).charAt(0),
-        input_data.display);
+    char c = uBit.serial.read(1, ASYNC).
+    if (c == MICROBIT_NO_DATA) {
+        uBit.display.scroll('a');
+        return;
+    } else {
+        parse_display(c, input_data.display);
+    }
     input_data.compass = uBit.compass.heading();
     input_data.acceleration.x = uBit.accelerometer.getX();
     input_data.acceleration.y = uBit.accelerometer.getY();
