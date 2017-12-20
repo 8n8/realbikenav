@@ -455,7 +455,6 @@ def state2output(state: State) -> Output:
     """
     It converts the state into the data needed for writing the output.
     """
-    print('led_error is {}'.format(state['error_response']['led_error']))
     return {
         'counter': state['counter'],
         'start_new_data_batch': state['start_new_data_batch'],
@@ -734,7 +733,6 @@ def send_output(output: Output, microbit_port):
     if output['write_data_to_disk']:
         write2file(output['parsed_input'], output['destination'],
                    output['speed'], output['data_directory'])
-    print(output['display'])
     microbit_port.write([output['display']])
     if not empty(output['error_response']['log_messages']):
         print(output['error_response']['log_messages'])
@@ -809,7 +807,6 @@ def main():
     with serial.Serial('/dev/ttyACM0', baudrate=115200) as gps_port, \
             serial.Serial('/dev/ttyACM1', baudrate=115200) as microbit_port:
         while not state['error_response']['stop_program']:
-            send_output(state2output(state), microbit_port)
             raw_input_data = read_input(
                 state['position'],
                 state['destination'],
@@ -817,6 +814,7 @@ def main():
                 webcam_handle,
                 gps_port,
                 microbit_port)
+            send_output(state2output(state), microbit_port)
             state = update_state(state, parse_input(raw_input_data))
 
 

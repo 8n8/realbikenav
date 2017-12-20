@@ -47,8 +47,6 @@ struct InputData {
 // It converts the display byte received from the serial port into
 // the led struct.
 void parse_display(const char &raw_display, leds &display) {
-    ManagedString disp(raw_display);
-    uBit.display.scroll(disp);
     display.new_destination = raw_display & 1;
     display.direction = (raw_display >> 1) & 15;
     display.recording_state = (raw_display >> 5) & 3;
@@ -61,14 +59,6 @@ void read_input(InputData &input_data) {
     parse_display(
         uBit.serial.read(1).charAt(0),
         input_data.display);
-    // ManagedString readable(uBit.serial.isReadable());
-    // uBit.display.scroll(readable);
-    // if (uBit.serial.isReadable() == 1) {
-    //     ManagedString reading(uBit.serial.read(1, ASYNC));
-    //     uBit.display.scroll("a");
-    // } else {
-    //     return;
-    // }
     input_data.compass = uBit.compass.heading();
     input_data.acceleration.x = uBit.accelerometer.getX();
     input_data.acceleration.y = uBit.accelerometer.getY();
@@ -231,21 +221,11 @@ int main() {
     state.buttonBcounter = 0;
 
     InputData input_data;
-    input_data.display.new_destination = false;
-    input_data.display.direction = 0;
-    input_data.display.recording_state = 0; 
-    input_data.display.error_state = false;
-    input_data.compass = 0;
-    input_data.acceleration.x = 0;
-    input_data.acceleration.y = 0;
-    input_data.acceleration.z = 0;
-    input_data.buttonA = false;
-    input_data.buttonB = false;
 
     while(true) {
+        send_output(state);
         read_input(input_data);
         update_state(state, input_data);
-        send_output(state);
     }
 
     // If main exits, there may still be other fibers running or
