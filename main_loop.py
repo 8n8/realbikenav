@@ -455,6 +455,7 @@ def state2output(state: State) -> Output:
     """
     It converts the state into the data needed for writing the output.
     """
+    print('led_error is {}'.format(state['error_response']['led_error']))
     return {
         'counter': state['counter'],
         'start_new_data_batch': state['start_new_data_batch'],
@@ -733,6 +734,7 @@ def send_output(output: Output, microbit_port):
     if output['write_data_to_disk']:
         write2file(output['parsed_input'], output['destination'],
                    output['speed'], output['data_directory'])
+    print(output['display'])
     microbit_port.write([output['display']])
     if not empty(output['error_response']['log_messages']):
         print(output['error_response']['log_messages'])
