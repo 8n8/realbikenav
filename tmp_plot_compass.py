@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt  # type: ignore
 with open('sensor_readings.dat', 'r') as data_file:
     data = [json.loads(line) for line in data_file.read().splitlines()]
 
-compass = [d['microbit']['compass'] for d in data]
+compass = [d['direction'] for d in data]
 print([int(c) for c in compass])
 print(len(compass))
 print(type(compass[0]))

@@ -583,6 +583,7 @@ def update_state(s: State, parsed_input: ParsedInput) -> State:
     speed: float = kalman_state['x'][0][0]  # type: ignore
 
     direction: float = kalman_state['x'][1][0]  # type: ignore
+    print('direction is {}'.format(direction))
 
     position: plan_route.MapPosition = plan_route.MapPosition(  # type: ignore
         latitude=kalman_state['x'][2][0],  # type: ignore
@@ -707,7 +708,6 @@ def read_input(
         random_destination = make_random_destination()
     else:
         random_destination = None, destination
-    x = read_microbit(microbit_serial_port)
     return {
         'err_and_microbit': read_microbit(microbit_serial_port),
         'err_and_gps': read_gps(gps_serial_port),
